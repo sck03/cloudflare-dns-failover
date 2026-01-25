@@ -1,0 +1,8 @@
+Flask==3.0.0
+Flask-SQLAlchemy==3.1.1
+Flask-Login==0.6.3
+APScheduler==3.10.4
+requests==2.31.0
+ping3==4.0.8
+cloudflare==2.19.4
+python-dotenv==1.0.0
