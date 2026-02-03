@@ -62,6 +62,31 @@ pip install -r requirements.txt
 ```bash
 ./start.sh
 ```
+start.sh文件修改,增加8081端口检测
+#!/bin/bash
+cd "$(dirname "$0")"
+
+# 激活虚拟环境
+if [ -f "venv/bin/activate" ]; then
+    source venv/bin/activate
+else
+    echo "未找到虚拟环境。请先运行 install.sh。"
+    exit 1
+fi
+
+# 使用 Waitress 运行 (生产模式)
+if lsof -i :8081 >/dev/null; then
+    echo "端口 8081 占用中，正在释放..."
+    sudo fuser -k 8081/tcp
+    sleep 2
+fi
+echo "正在启动 CFGuard (Waitress 端口 8081)..."
+waitress-serve --port=8081 --call "app:create_app"
+
+推荐后台跑，避免重复
+nohup ./start.sh > cfguard.log 2>&1 &
+# 或简单：
+./start.sh &
 
 **开发模式:**
 ```bash
