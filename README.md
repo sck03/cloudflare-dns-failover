@@ -75,12 +75,14 @@ else
 fi
 
 # 使用 Waitress 运行 (生产模式)
+#!/bin/bash
 if lsof -i :8081 >/dev/null; then
     echo "端口 8081 占用中，正在释放..."
     sudo fuser -k 8081/tcp
     sleep 2
 fi
 echo "正在启动 CFGuard (Waitress 端口 8081)..."
+# 下面是原 waitress-serve 命令
 waitress-serve --port=8081 --call "app:create_app"
 
 推荐后台跑，避免重复
