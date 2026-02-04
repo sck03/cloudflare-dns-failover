@@ -63,7 +63,7 @@ pip install -r requirements.txt
 ./start.sh
 ```
 start.sh文件修改,增加8081端口检测
-#!/bin/bash
+```#!/bin/bash
 cd "$(dirname "$0")"
 
 # 激活虚拟环境
@@ -89,6 +89,7 @@ waitress-serve --port=8081 --call "app:create_app"
 nohup ./start.sh > cfguard.log 2>&1 &
 # 或简单：
 ./start.sh &
+```
 
 **开发模式:**
 ```bash
