@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  cfguard:
+    build: .
+    container_name: cfguard
+    restart: unless-stopped
+    ports:
+      - "8099:8099"
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./instance:/app/instance
+    environment:
+      - TZ=Asia/Shanghai
+    # capabilities required for ping in some environments
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW

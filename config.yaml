@@ -1,0 +1,104 @@
+# CFGuard 配置文件 (Go Version)
+# 此版本基于 Go 重构，完全超越了原 Python 版本 (https://github.com/woniu336/cloudflare-dns-failover)
+# 优势：资源占用极低 (<20MB 内存)、高性能并发监控、单文件部署、支持多账号管理、计划任务 IP 轮换。
+
+server:
+  # 服务监听端口 (默认 8099)
+  port: 8099
+  # 调试模式 (生产环境建议 false)
+  debug: false
+  # 是否开启登录认证 (建议开启，内网环境可关闭)
+  auth_enabled: true
+  # JWT 密钥，用于登录会话加密，请务必修改为随机字符串
+  # 【安全提示】此密钥同时也作为 Web 管理界面的【登录密码】！
+  # 请务必设置一个复杂的字符串，例如 "MySecurePassword2024!"
+  jwt_secret: "please-change-this-secret-key-in-production"
+
+database:
+  # SQLite 数据库存储路径 (Docker 映射时请保持在 instance 目录)
+  path: "instance/cfguard.db"
+
+# -----------------------------------------------------------------------------
+# 多账号管理 (支持配置多个 Cloudflare 账号)
+# -----------------------------------------------------------------------------
+accounts:
+  # 账号 1 (推荐使用 API Token，权限更细粒度)
+  - name: "default"
+    # 获取 Token: https://dash.cloudflare.com/profile/api-tokens
+    # 权限要求: Zone.DNS (编辑)
+    api_token: "YOUR_CF_API_TOKEN_HERE"
+    
+  # 账号 2 (备用账号示例，使用 Global API Key)
+  # - name: "company_account"
+  #   email: "admin@company.com"
+  #   api_key: "GLOBAL_API_KEY_HERE"
+
+# -----------------------------------------------------------------------------
+# 通知渠道配置 (支持多渠道同时发送)
+# -----------------------------------------------------------------------------
+notification:
+  # 钉钉机器人 (DingTalk)
+  dingtalk:
+    enabled: false
+    # 机器人的 Access Token
+    access_token: ""
+    # 安全设置中的加签密钥 (SEC...)，留空则不使用签名校验
+    secret: "" 
+
+  # Telegram 机器人
+  telegram:
+    enabled: false
+    # Bot Token (从 @BotFather 获取)
+    bot_token: ""
+    # 接收通知的 Chat ID (个人或群组 ID)
+    chat_id: ""
+
+  # 邮件通知 (支持 SSL/TLS)
+  email:
+    enabled: false
+    # SMTP 服务器地址 (例如: smtp.qq.com, smtp.gmail.com)
+    host: "smtp.example.com"
+    # 端口: 465 (SSL/TLS) 或 587 (STARTTLS)
+    port: 465
+    # 发件人邮箱账号
+    username: "sender@example.com"
+    # 邮箱密码或应用专用密码 (App Password)
+    password: "password"
+    # 收件人邮箱
+    to: "receiver@example.com"
+
+# -----------------------------------------------------------------------------
+# 初始监控配置
+# -----------------------------------------------------------------------------
+# 注意：此配置仅在首次启动且数据库为空时导入。
+# 后续主要通过 Web 界面 (http://localhost:8099) 或 API 进行管理。
+monitors:
+  # 示例 1: HTTP 监控与故障切换
+  # - name: "Web Server Monitor"
+  #   account: "default"       # 关联上方 accounts 中的 name
+  #   domain: "www.example.com" # 完整的子域名
+  #   zone_id: "your_zone_id"   # Cloudflare Zone ID (在域名概览页右下角)
+  #   cf_record_id: ""          # 可选，留空程序会自动根据 domain 查找
+  #   type: "http"              # 监控类型: http, https, ping
+  #   target: "https://www.example.com" # 监控目标
+  #   original_ip: "1.2.3.4"    # 主 IP (正常时使用)
+  #   backup_ip: "5.6.7.8"      # 备用 IP (故障时切换)
+  #   interval: 60              # 检测间隔 (秒)
+  #   timeout: 5                # 超时时间 (秒)
+  #   retries: 3                # 连续失败多少次触发切换
+
+  # 示例 2: 计划任务 IP 轮换 (例如白天用 A，晚上用 B)
+  # - name: "Scheduled IP Rotation"
+  #   account: "default"
+  #   domain: "api.example.com"
+  #   zone_id: "your_zone_id"
+  #   type: "ping"
+  #   target: "1.2.3.4"
+  #   original_ip: "1.2.3.4"
+  #   backup_ip: "5.6.7.8"
+  #   # 计划任务列表 (Cron 表达式)
+  #   schedules:
+  #     - cron: "0 8 * * *"   # 每天 08:00 自动切换到主 IP
+  #       target_ip: "1.2.3.4"
+  #     - cron: "0 20 * * *"  # 每天 20:00 自动切换到备用 IP
+  #       target_ip: "5.6.7.8"
