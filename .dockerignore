@@ -1,0 +1,10 @@
+config.yaml
+instance/
+cfguard.db
+.git
+.github
+python_legacy
+Dockerfile
+README.md
+RELEASE.md
+.gitignore

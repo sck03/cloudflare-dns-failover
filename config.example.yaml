@@ -1,0 +1,64 @@
+server:
+  # 服务监听端口 (默认 8099)
+  port: 8099
+  # 调试模式 (生产环境建议 false)
+  debug: false
+  # 是否开启登录认证 (建议开启，内网环境可关闭)
+  auth_enabled: true
+  # JWT 密钥，用于登录会话加密
+  # 【重要】这也是 Web 管理界面的登录密码！生产环境请务必修改。
+  jwt_secret: "change-this-secret-key-in-production"
+
+database:
+  # 数据库文件路径
+  path: "instance/cfguard.db"
+
+accounts:
+  - name: "default"
+    # 推荐使用 API Token (权限控制更细)
+    # 获取地址: https://dash.cloudflare.com/profile/api-tokens
+    api_token: "YOUR_CLOUDFLARE_API_TOKEN"
+    # 或者使用 Email + Global API Key (旧版方式，不推荐)
+    email: ""
+    api_key: ""
+
+notification:
+  dingtalk:
+    enabled: false
+    access_token: ""
+    # 可选：安全设置中的加签密钥
+    secret: ""
+  telegram:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+  email:
+    enabled: false
+    host: "smtp.example.com"
+    # 端口: 465 (SSL/TLS) 或 587 (STARTTLS)
+    port: 465
+    username: "your_email@example.com"
+    password: "your_email_password"
+    to: "admin@example.com"
+
+monitors:
+  - name: "Web Server Monitor"
+    account: "default"         # 对应上方 accounts 中的 name
+    domain: "sub.example.com"  # 需要监控的域名
+    zone_id: "your_zone_id_here" # Cloudflare Zone ID
+    cf_record_id: ""           # 留空则自动检测
+    type: "http"               # 监控类型: http, https, 或 ping
+    dns_type: "A"              # DNS 记录类型: A (IPv4), AAAA (IPv6), 或 CNAME
+    target: "https://sub.example.com" # 监控目标 (URL 或 IP)
+    original_ip: "1.2.3.4"     # 主 IP (或 CNAME 域名)
+    backup_ip: "5.6.7.8"       # 备用 IP (或 CNAME 域名)
+    interval: 60               # 检测间隔 (秒)
+    timeout: 5                 # 超时时间 (秒)
+    retries: 3                 # 连续失败次数触发切换
+    recovery_retries: 2        # 连续成功次数触发恢复 (防止网络抖动)
+    schedules:
+      # 可选: 计划任务 IP 轮换
+      - cron: "0 8 * * *"      # 每天 08:00
+        target_ip: "1.2.3.4"
+      - cron: "0 20 * * *"     # 每天 20:00
+        target_ip: "5.6.7.8"

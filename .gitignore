@@ -1,0 +1,9 @@
+config.yaml
+instance/
+cfguard.db
+cfguard.exe
+cfguard
+*.log
+.DS_Store
+.idea/
+.vscode/
