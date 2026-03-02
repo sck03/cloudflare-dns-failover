@@ -58,9 +58,9 @@ func LoadConfig() {
 	// Set Defaults
 	AppConfig.Server.AuthEnabled = true
 
-	f, err := os.Open("config.yaml")
+	f, err := os.Open("config/config.yaml")
 	if err != nil {
-		log.Println("config.yaml not found, using defaults")
+		log.Println("config/config.yaml not found, using defaults")
 		AppConfig.Server.Port = 8099
 		AppConfig.Database.Path = "instance/cfguard.db"
 		return
@@ -70,6 +70,6 @@ func LoadConfig() {
 	decoder := yaml.NewDecoder(f)
 	err = decoder.Decode(&AppConfig)
 	if err != nil {
-		log.Fatal("Failed to parse config.yaml:", err)
+		log.Fatal("Failed to parse config/config.yaml:", err)
 	}
 }

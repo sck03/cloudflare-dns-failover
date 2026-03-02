@@ -30,7 +30,9 @@ type Monitor struct {
 	SuccCount       int        `json:"succ_count"`
 	CurrentIP       string     `json:"current_ip"`
 	BackupIP        string     `json:"backup_ip"`
+	BackupIPProxy   bool       `json:"backup_ip_cdn_enabled"` // CDN enabled for Backup IP
 	OriginalIP      string     `json:"original_ip"`
+	OriginalIPProxy bool       `json:"original_ip_cdn_enabled"` // CDN enabled for Original IP
 	CFZoneID        string     `json:"cf_zone_id"`
 	CFRecordID      string     `json:"cf_record_id"`
 	CFDomain        string     `json:"cf_domain"`
@@ -47,7 +49,9 @@ type MonitorConfig struct {
 	DNSType         string           `yaml:"dns_type" json:"dns_type"`
 	Target          string           `yaml:"target" json:"target"`
 	OriginalIP      string           `yaml:"original_ip" json:"original_ip"`
+	OriginalIPProxy bool             `yaml:"original_ip_proxy" json:"original_ip_cdn_enabled"`
 	BackupIP        string           `yaml:"backup_ip" json:"backup_ip"`
+	BackupIPProxy   bool             `yaml:"backup_ip_proxy" json:"backup_ip_cdn_enabled"`
 	Interval        int              `yaml:"interval" json:"interval"`
 	Timeout         int              `yaml:"timeout" json:"timeout"`
 	Retries         int              `yaml:"retries" json:"retries"`
@@ -88,7 +92,9 @@ func (mc *MonitorConfig) ToMonitor() Monitor {
 		Retries:         mc.Retries,
 		RecoveryRetries: mc.RecoveryRetries,
 		OriginalIP:      mc.OriginalIP,
+		OriginalIPProxy: mc.OriginalIPProxy,
 		BackupIP:        mc.BackupIP,
+		BackupIPProxy:   mc.BackupIPProxy,
 		CFZoneID:        mc.ZoneID,
 		CFRecordID:      mc.RecordID,
 		CFDomain:        mc.Domain,

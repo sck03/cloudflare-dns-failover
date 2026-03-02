@@ -8,7 +8,7 @@ services:
     ports:
       - "8099:8099"
     volumes:
-      - ./config.yaml:/app/config.yaml
+      - ./config.yaml:/app/config/config.yaml
       - ./instance:/app/instance
     environment:
       - TZ=Asia/Shanghai

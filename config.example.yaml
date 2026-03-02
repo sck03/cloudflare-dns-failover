@@ -51,7 +51,9 @@ monitors:
     dns_type: "A"              # DNS 记录类型: A (IPv4), AAAA (IPv6), 或 CNAME
     target: "https://sub.example.com" # 监控目标 (URL 或 IP)
     original_ip: "1.2.3.4"     # 主 IP (或 CNAME 域名)
+    original_ip_proxy: false   # 主 IP 是否开启 CDN (云朵图标)
     backup_ip: "5.6.7.8"       # 备用 IP (或 CNAME 域名)
+    backup_ip_proxy: true      # 备 IP 是否开启 CDN
     interval: 60               # 检测间隔 (秒)
     timeout: 5                 # 超时时间 (秒)
     retries: 3                 # 连续失败次数触发切换
@@ -62,3 +64,29 @@ monitors:
         target_ip: "1.2.3.4"
       - cron: "0 20 * * *"     # 每天 20:00
         target_ip: "5.6.7.8"
+
+  # 示例 2: 多个域名共用相同的主备 IP (如 example.com 和 www.example.com)
+  # 需要分别添加两个监控项
+  - name: "Main Domain (@)"
+    account: "default"
+    domain: "example.com"      # 根域名
+    zone_id: "your_zone_id_here"
+    type: "http"
+    target: "https://example.com"
+    original_ip: "1.2.3.4"
+    original_ip_proxy: true
+    backup_ip: "5.6.7.8"
+    backup_ip_proxy: true
+    interval: 60
+    
+  - name: "WWW Domain"
+    account: "default"
+    domain: "www.example.com"
+    zone_id: "your_zone_id_here"
+    type: "http"
+    target: "https://www.example.com"
+    original_ip: "1.2.3.4"
+    original_ip_proxy: true
+    backup_ip: "5.6.7.8"
+    backup_ip_proxy: true
+    interval: 60

@@ -32,10 +32,10 @@ RUN apk add --no-cache ca-certificates tzdata iputils
 COPY --from=builder /app/cfguard .
 
 # Copy example config as default config
-COPY --from=builder /app/config.example.yaml ./config.yaml
+COPY --from=builder /app/config.example.yaml ./config/config.yaml
 
 # Create instance directory for DB
-RUN mkdir -p instance
+RUN mkdir -p config instance
 
 # Set environment variables
 ENV TZ=Asia/Shanghai

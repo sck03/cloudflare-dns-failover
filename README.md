@@ -77,7 +77,7 @@ docker run -d \
   --name cfguard \
   --restart always \
   -p 8099:8099 \
-  -v $(pwd)/config.yaml:/app/config.yaml \
+  -v $(pwd)/config.yaml:/app/config/config.yaml \
   -v $(pwd)/instance:/app/instance \
   ghcr.io/sck03/cloudflare-dns-failover:latest
 ```

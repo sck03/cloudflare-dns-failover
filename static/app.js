@@ -36,7 +36,7 @@ class DNSManager {
 
                 // 如果需要设置或未认证，跳转到登录页
                 if (result.data.need_setup || !result.data.authenticated) {
-                    window.location.href = '/login.html';
+                    window.location.href = '/login';
                     return;
                 }
             }
@@ -84,7 +84,7 @@ class DNSManager {
 
         // 如果返回401未授权，跳转到登录页
         if (response.status === 401) {
-            window.location.href = '/login.html';
+            window.location.href = '/login';
             throw new Error('未登录或登录已过期');
         }
 

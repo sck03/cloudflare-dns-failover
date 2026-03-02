@@ -40,10 +40,37 @@ func main() {
 	r.StaticFS("/static", http.FS(staticFiles))
 
 	r.GET("/", func(c *gin.Context) {
-		c.FileFromFS("index.html", http.FS(staticFiles))
+		content, err := fs.ReadFile(staticFiles, "index.html")
+		if err != nil {
+			c.String(500, "Error reading index.html: %v", err)
+			return
+		}
+		c.Data(200, "text/html; charset=utf-8", content)
 	})
 	r.GET("/login", func(c *gin.Context) {
-		c.FileFromFS("login.html", http.FS(staticFiles))
+		content, err := fs.ReadFile(staticFiles, "login.html")
+		if err != nil {
+			c.String(500, "Error reading login.html: %v", err)
+			return
+		}
+		c.Data(200, "text/html; charset=utf-8", content)
+	})
+	// Redirect old login.html or serve it directly
+	r.GET("/login.html", func(c *gin.Context) {
+		content, err := fs.ReadFile(staticFiles, "login.html")
+		if err != nil {
+			c.String(500, "Error reading login.html: %v", err)
+			return
+		}
+		c.Data(200, "text/html; charset=utf-8", content)
+	})
+	r.GET("/app.js", func(c *gin.Context) {
+		content, err := fs.ReadFile(staticFiles, "app.js")
+		if err != nil {
+			c.String(500, "Error reading app.js: %v", err)
+			return
+		}
+		c.Data(200, "application/javascript", content)
 	})
 	r.GET("/favicon.ico", func(c *gin.Context) {
 		c.FileFromFS("favicon.ico", http.FS(staticFiles))

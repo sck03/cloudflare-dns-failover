@@ -70,6 +70,9 @@ func getHTTPClient(forceIP string, timeout int) *http.Client {
 	client := &http.Client{
 		Timeout:   time.Duration(timeout) * time.Second,
 		Transport: tr,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 	httpClients[key] = client
 	return client

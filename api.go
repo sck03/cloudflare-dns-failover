@@ -109,7 +109,9 @@ func UpdateMonitor(c *gin.Context) {
 	monitor.Retries = input.Retries
 	monitor.RecoveryRetries = input.RecoveryRetries
 	monitor.OriginalIP = input.OriginalIP
+	monitor.OriginalIPProxy = input.OriginalIPProxy
 	monitor.BackupIP = input.BackupIP
+	monitor.BackupIPProxy = input.BackupIPProxy
 
 	// Handle critical field changes that require re-fetching Record ID
 	shouldFetchID := false

@@ -61,7 +61,7 @@ func SeedMonitors() {
 		return
 	}
 
-	log.Println("Syncing monitors from config.yaml...")
+	log.Println("Syncing monitors from config/config.yaml...")
 	for _, mc := range AppConfig.Monitors {
 		// Convert Config to Monitor Model (with defaults applied)
 		configMonitor := mc.ToMonitor()
@@ -91,7 +91,9 @@ func SeedMonitors() {
 				"retries":          configMonitor.Retries,
 				"recovery_retries": configMonitor.RecoveryRetries,
 				"original_ip":      configMonitor.OriginalIP,
+				"original_ip_proxy": configMonitor.OriginalIPProxy,
 				"backup_ip":        configMonitor.BackupIP,
+				"backup_ip_proxy":  configMonitor.BackupIPProxy,
 				"cf_zone_id":       configMonitor.CFZoneID,
 				"cf_record_id":     configMonitor.CFRecordID,
 				"cf_domain":        configMonitor.CFDomain,

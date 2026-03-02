@@ -86,7 +86,13 @@ func UpdateCloudflareDNS(m *Monitor, targetIP string) bool {
 		"content": targetIP,
 		"name":    m.CFDomain,
 		"type":    dnsType,
-		// "proxied": true, // Optional: preserve proxy status
+	}
+
+	// Determine proxy status based on target IP
+	if targetIP == m.OriginalIP {
+		payload["proxied"] = m.OriginalIPProxy
+	} else if targetIP == m.BackupIP {
+		payload["proxied"] = m.BackupIPProxy
 	}
 
 	jsonPayload, _ := json.Marshal(payload)
@@ -148,7 +154,8 @@ func FetchCloudflareRecordID(m *Monitor) (string, error) {
 			Message string `json:"message"`
 		} `json:"errors"`
 		Result []struct {
-			ID string `json:"id"`
+			ID      string `json:"id"`
+			Content string `json:"content"`
 		} `json:"result"`
 	}
 
@@ -165,6 +172,15 @@ func FetchCloudflareRecordID(m *Monitor) (string, error) {
 	}
 
 	if len(result.Result) > 0 {
+		// Try to find a record that matches the OriginalIP (Primary)
+		if m.OriginalIP != "" {
+			for _, record := range result.Result {
+				if record.Content == m.OriginalIP {
+					return record.ID, nil
+				}
+			}
+		}
+		// If no match found (or OriginalIP is empty), return the first one
 		return result.Result[0].ID, nil
 	}
 	return "", fmt.Errorf("record not found")
