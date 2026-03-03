@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"runtime"
 	"strings"
 	"time"
 
@@ -20,6 +21,287 @@ func GetMonitors(c *gin.Context) {
 	c.JSON(http.StatusOK, monitors)
 }
 
+func GetStatus(c *gin.Context) {
+	var monitors []Monitor
+	DB.Find(&monitors)
+
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+
+	c.JSON(http.StatusOK, gin.H{
+		"system": gin.H{
+			"goroutines": runtime.NumGoroutine(),
+			"mem_alloc":  mem.Alloc,
+		},
+		"monitors": monitors,
+	})
+}
+
+func GetZones(c *gin.Context) {
+	acc := GetActiveAccountConfig()
+	if acc == nil {
+		c.JSON(http.StatusOK, []CloudflareZone{})
+		return
+	}
+	zones, err := FetchCloudflareZones(acc)
+	if err != nil {
+		log.Printf("Failed to fetch zones: %v", err)
+		c.JSON(http.StatusOK, []CloudflareZone{})
+		return
+	}
+	c.JSON(http.StatusOK, zones)
+}
+
+func GetZoneRecords(c *gin.Context) {
+	zoneID := c.Param("zoneId")
+	acc := GetActiveAccountConfig()
+	if acc == nil {
+		c.JSON(http.StatusOK, []CloudflareRecord{})
+		return
+	}
+	records, err := FetchCloudflareRecords(acc, zoneID)
+	if err != nil {
+		log.Printf("Failed to fetch zone records: %v", err)
+		c.JSON(http.StatusOK, []CloudflareRecord{})
+		return
+	}
+	c.JSON(http.StatusOK, records)
+}
+
+type ConfigPayload struct {
+	Cloudflare struct {
+		ApiToken string `json:"api_token"`
+	} `json:"cloudflare"`
+	DingTalk struct {
+		Enabled     bool   `json:"enabled"`
+		AccessToken string `json:"access_token"`
+		Secret      string `json:"secret"`
+	} `json:"dingtalk"`
+	Telegram struct {
+		Enabled  bool   `json:"enabled"`
+		BotToken string `json:"bot_token"`
+		ChatID   string `json:"chat_id"`
+	} `json:"telegram"`
+	Email struct {
+		Enabled  bool   `json:"enabled"`
+		Host     string `json:"host"`
+		Port     int    `json:"port"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+		To       string `json:"to"`
+	} `json:"email"`
+}
+
+func GetConfig(c *gin.Context) {
+	acc := GetActiveAccountConfig()
+	payload := ConfigPayload{}
+	if acc != nil {
+		payload.Cloudflare.ApiToken = acc.ApiToken
+	}
+	payload.DingTalk.Enabled = AppConfig.Notification.DingTalk.Enabled
+	payload.DingTalk.AccessToken = AppConfig.Notification.DingTalk.AccessToken
+	payload.DingTalk.Secret = AppConfig.Notification.DingTalk.Secret
+	payload.Telegram.Enabled = AppConfig.Notification.Telegram.Enabled
+	payload.Telegram.BotToken = AppConfig.Notification.Telegram.BotToken
+	payload.Telegram.ChatID = AppConfig.Notification.Telegram.ChatID
+	payload.Email.Enabled = AppConfig.Notification.Email.Enabled
+	payload.Email.Host = AppConfig.Notification.Email.Host
+	payload.Email.Port = AppConfig.Notification.Email.Port
+	payload.Email.Username = AppConfig.Notification.Email.Username
+	payload.Email.Password = AppConfig.Notification.Email.Password
+	payload.Email.To = AppConfig.Notification.Email.To
+	c.JSON(http.StatusOK, payload)
+}
+
+func SaveConfigHandler(c *gin.Context) {
+	var input ConfigPayload
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	acc := GetActiveAccountConfig()
+	if acc == nil {
+		AppConfig.Accounts = []AccountConfig{{Name: "default", ApiToken: input.Cloudflare.ApiToken}}
+	} else if input.Cloudflare.ApiToken != "" {
+		acc.ApiToken = input.Cloudflare.ApiToken
+	}
+
+	AppConfig.Notification.DingTalk.Enabled = input.DingTalk.Enabled
+	AppConfig.Notification.DingTalk.AccessToken = input.DingTalk.AccessToken
+	AppConfig.Notification.DingTalk.Secret = input.DingTalk.Secret
+	AppConfig.Notification.Telegram.Enabled = input.Telegram.Enabled
+	AppConfig.Notification.Telegram.BotToken = input.Telegram.BotToken
+	AppConfig.Notification.Telegram.ChatID = input.Telegram.ChatID
+	AppConfig.Notification.Email.Enabled = input.Email.Enabled
+	AppConfig.Notification.Email.Host = input.Email.Host
+	AppConfig.Notification.Email.Port = input.Email.Port
+	AppConfig.Notification.Email.Username = input.Email.Username
+	AppConfig.Notification.Email.Password = input.Email.Password
+	AppConfig.Notification.Email.To = input.Email.To
+
+	if err := SaveConfig(""); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "saved"})
+}
+
+type AccountPayload struct {
+	Name     string `json:"name"`
+	ApiToken string `json:"api_token"`
+	Email    string `json:"email"`
+	ApiKey   string `json:"api_key"`
+}
+
+type AccountView struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	ApiToken string `json:"api_token"`
+	Email    string `json:"email"`
+	ApiKey   string `json:"api_key"`
+}
+
+func GetCloudflareAccounts(c *gin.Context) {
+	views := make([]AccountView, 0, len(AppConfig.Accounts))
+	for _, acc := range AppConfig.Accounts {
+		views = append(views, AccountView{
+			ID:       acc.Name,
+			Name:     acc.Name,
+			ApiToken: acc.ApiToken,
+			Email:    acc.Email,
+			ApiKey:   acc.ApiKey,
+		})
+	}
+	activeIndex := 0
+	if AppConfig.ActiveAccount != "" {
+		for i, acc := range AppConfig.Accounts {
+			if acc.Name == AppConfig.ActiveAccount {
+				activeIndex = i
+				break
+			}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"accounts": views, "active_index": activeIndex})
+}
+
+func CreateCloudflareAccount(c *gin.Context) {
+	var input AccountPayload
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if input.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+	for i := range AppConfig.Accounts {
+		if AppConfig.Accounts[i].Name == input.Name {
+			AppConfig.Accounts[i].ApiToken = input.ApiToken
+			AppConfig.Accounts[i].Email = input.Email
+			AppConfig.Accounts[i].ApiKey = input.ApiKey
+			if err := SaveConfig(""); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"message": "updated"})
+			return
+		}
+	}
+	AppConfig.Accounts = append(AppConfig.Accounts, AccountConfig{
+		Name:     input.Name,
+		ApiToken: input.ApiToken,
+		Email:    input.Email,
+		ApiKey:   input.ApiKey,
+	})
+	if AppConfig.ActiveAccount == "" {
+		AppConfig.ActiveAccount = input.Name
+	}
+	if err := SaveConfig(""); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "created"})
+}
+
+func UpdateCloudflareAccount(c *gin.Context) {
+	id := c.Param("id")
+	var input AccountPayload
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	for i := range AppConfig.Accounts {
+		if AppConfig.Accounts[i].Name == id {
+			if input.Name != "" && input.Name != id {
+				AppConfig.Accounts[i].Name = input.Name
+			}
+			if input.ApiToken != "" {
+				AppConfig.Accounts[i].ApiToken = input.ApiToken
+			}
+			if input.Email != "" {
+				AppConfig.Accounts[i].Email = input.Email
+			}
+			if input.ApiKey != "" {
+				AppConfig.Accounts[i].ApiKey = input.ApiKey
+			}
+			if AppConfig.ActiveAccount == id && input.Name != "" && input.Name != id {
+				AppConfig.ActiveAccount = input.Name
+			}
+			if err := SaveConfig(""); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"message": "updated"})
+			return
+		}
+	}
+	c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+}
+
+func DeleteCloudflareAccount(c *gin.Context) {
+	id := c.Param("id")
+	index := -1
+	for i, acc := range AppConfig.Accounts {
+		if acc.Name == id {
+			index = i
+			break
+		}
+	}
+	if index == -1 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		return
+	}
+	AppConfig.Accounts = append(AppConfig.Accounts[:index], AppConfig.Accounts[index+1:]...)
+	if AppConfig.ActiveAccount == id {
+		if len(AppConfig.Accounts) > 0 {
+			AppConfig.ActiveAccount = AppConfig.Accounts[0].Name
+		} else {
+			AppConfig.ActiveAccount = ""
+		}
+	}
+	if err := SaveConfig(""); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
+func ActivateCloudflareAccount(c *gin.Context) {
+	id := c.Param("id")
+	for _, acc := range AppConfig.Accounts {
+		if acc.Name == id {
+			AppConfig.ActiveAccount = id
+			if err := SaveConfig(""); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"message": "activated"})
+			return
+		}
+	}
+	c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+}
 func CreateMonitor(c *gin.Context) {
 	var input MonitorConfig
 	if err := c.ShouldBindJSON(&input); err != nil {

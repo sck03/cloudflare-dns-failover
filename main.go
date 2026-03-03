@@ -87,11 +87,21 @@ func main() {
 		authorized := api.Group("/")
 		authorized.Use(AuthMiddleware())
 		{
+			authorized.GET("/status", GetStatus)
 			authorized.GET("/monitors", GetMonitors)
 			authorized.POST("/monitors", CreateMonitor)
 			authorized.PUT("/monitors/:id", UpdateMonitor)
 			authorized.DELETE("/monitors/:id", DeleteMonitor)
 			authorized.POST("/monitors/:id/restore", RestoreMonitor)
+			authorized.GET("/zones", GetZones)
+			authorized.GET("/zones/:zoneId/records", GetZoneRecords)
+			authorized.GET("/config", GetConfig)
+			authorized.POST("/config", SaveConfigHandler)
+			authorized.GET("/cloudflare-accounts", GetCloudflareAccounts)
+			authorized.POST("/cloudflare-accounts", CreateCloudflareAccount)
+			authorized.PUT("/cloudflare-accounts/:id", UpdateCloudflareAccount)
+			authorized.DELETE("/cloudflare-accounts/:id", DeleteCloudflareAccount)
+			authorized.POST("/cloudflare-accounts/:id/activate", ActivateCloudflareAccount)
 		}
 	}
 

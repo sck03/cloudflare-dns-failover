@@ -29,6 +29,15 @@ func GetAccountConfig(name string) *AccountConfig {
 	return nil
 }
 
+func GetActiveAccountConfig() *AccountConfig {
+	if AppConfig.ActiveAccount != "" {
+		if acc := GetAccountConfig(AppConfig.ActiveAccount); acc != nil {
+			return acc
+		}
+	}
+	return GetAccountConfig("")
+}
+
 func newCloudflareRequest(method, url string, body io.Reader, acc *AccountConfig) (*http.Request, error) {
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
@@ -184,4 +193,90 @@ func FetchCloudflareRecordID(m *Monitor) (string, error) {
 		return result.Result[0].ID, nil
 	}
 	return "", fmt.Errorf("record not found")
+}
+
+type CloudflareZone struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Paused bool   `json:"paused"`
+}
+
+type CloudflareRecord struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Content string `json:"content"`
+	TTL     int    `json:"ttl"`
+	Proxied bool   `json:"proxied"`
+}
+
+func FetchCloudflareZones(acc *AccountConfig) ([]CloudflareZone, error) {
+	if acc == nil {
+		return []CloudflareZone{}, nil
+	}
+	url := "https://api.cloudflare.com/client/v4/zones?per_page=100"
+	req, err := newCloudflareRequest("GET", url, nil, acc)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := cfClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Success bool `json:"success"`
+		Errors  []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+		Result []CloudflareZone `json:"result"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	if !result.Success {
+		errMsg := "unknown error"
+		if len(result.Errors) > 0 {
+			errMsg = result.Errors[0].Message
+		}
+		return nil, fmt.Errorf("cloudflare api error: %s", errMsg)
+	}
+	return result.Result, nil
+}
+
+func FetchCloudflareRecords(acc *AccountConfig, zoneID string) ([]CloudflareRecord, error) {
+	if acc == nil || zoneID == "" {
+		return []CloudflareRecord{}, nil
+	}
+	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records?per_page=100", zoneID)
+	req, err := newCloudflareRequest("GET", url, nil, acc)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := cfClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Success bool `json:"success"`
+		Errors  []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+		Result []CloudflareRecord `json:"result"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	if !result.Success {
+		errMsg := "unknown error"
+		if len(result.Errors) > 0 {
+			errMsg = result.Errors[0].Message
+		}
+		return nil, fmt.Errorf("cloudflare api error: %s", errMsg)
+	}
+	return result.Result, nil
 }

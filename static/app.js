@@ -1,8 +1,7 @@
 // DNS故障切换管理系统 - 前端应用逻辑
 class DNSManager {
     constructor() {
-        const origin = window.location?.origin;
-        this.baseURL = origin && origin !== 'null' ? origin : 'http://localhost:8099';
+        this.baseURL = '';
         this.currentZoneId = null;
         this.currentZoneName = null;
         this.monitorInterval = null;
