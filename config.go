@@ -61,24 +61,6 @@ type Config struct {
 var AppConfig Config
 var LoadedConfigPath string
 
-func defaultConfig() Config {
-	var c Config
-	c.Server.Port = 8099
-	c.Server.Debug = false
-	c.Server.AuthEnabled = true
-	c.Server.JwtSecret = "please-change-this-secret-key-in-production"
-	c.Database.Path = "instance/cfguard.db"
-	c.Accounts = []AccountConfig{
-		{
-			Name:     "default",
-			ApiToken: "",
-			Email:    "",
-			ApiKey:   "",
-		},
-	}
-	return c
-}
-
 func SaveConfig(path string) error {
 	if path == "" {
 		path = LoadedConfigPath

@@ -109,8 +109,3 @@ type ScheduleConfig struct {
 	Cron     string `yaml:"cron" json:"cron"`
 	TargetIP string `yaml:"target_ip" json:"target_ip"`
 }
-
-type GlobalConfig struct {
-	Key   string `gorm:"primaryKey" json:"key"`
-	Value string `json:"value"`
-}
