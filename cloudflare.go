@@ -280,3 +280,109 @@ func FetchCloudflareRecords(acc *AccountConfig, zoneID string) ([]CloudflareReco
 	}
 	return result.Result, nil
 }
+
+func CreateCloudflareRecord(acc *AccountConfig, zoneID string, payload map[string]interface{}) (*CloudflareRecord, error) {
+	if acc == nil || zoneID == "" {
+		return nil, fmt.Errorf("account or zoneID is empty")
+	}
+	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records", zoneID)
+	jsonPayload, _ := json.Marshal(payload)
+	req, err := newCloudflareRequest("POST", url, bytes.NewBuffer(jsonPayload), acc)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := cfClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Success bool             `json:"success"`
+		Errors  []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+		Result  CloudflareRecord `json:"result"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %v", err)
+	}
+	if !result.Success {
+		errMsg := "unknown error"
+		if len(result.Errors) > 0 {
+			errMsg = result.Errors[0].Message
+		}
+		return nil, fmt.Errorf("cloudflare api error: %s", errMsg)
+	}
+	return &result.Result, nil
+}
+
+func UpdateCloudflareRecord(acc *AccountConfig, zoneID, recordID string, payload map[string]interface{}) (*CloudflareRecord, error) {
+	if acc == nil || zoneID == "" || recordID == "" {
+		return nil, fmt.Errorf("account, zoneID, or recordID is empty")
+	}
+	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s", zoneID, recordID)
+	jsonPayload, _ := json.Marshal(payload)
+	req, err := newCloudflareRequest("PUT", url, bytes.NewBuffer(jsonPayload), acc)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := cfClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Success bool             `json:"success"`
+		Errors  []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+		Result  CloudflareRecord `json:"result"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %v", err)
+	}
+	if !result.Success {
+		errMsg := "unknown error"
+		if len(result.Errors) > 0 {
+			errMsg = result.Errors[0].Message
+		}
+		return nil, fmt.Errorf("cloudflare api error: %s", errMsg)
+	}
+	return &result.Result, nil
+}
+
+func DeleteCloudflareRecord(acc *AccountConfig, zoneID, recordID string) error {
+	if acc == nil || zoneID == "" || recordID == "" {
+		return fmt.Errorf("account, zoneID, or recordID is empty")
+	}
+	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s", zoneID, recordID)
+	req, err := newCloudflareRequest("DELETE", url, nil, acc)
+	if err != nil {
+		return err
+	}
+	resp, err := cfClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Success bool `json:"success"`
+		Errors  []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse response: %v", err)
+	}
+	if !result.Success {
+		errMsg := "unknown error"
+		if len(result.Errors) > 0 {
+			errMsg = result.Errors[0].Message
+		}
+		return fmt.Errorf("cloudflare api error: %s", errMsg)
+	}
+	return nil
+}

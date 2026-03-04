@@ -72,31 +72,47 @@
 
 支持 **PC (amd64)**, **Mac M1/M2 (arm64)**, 和 **树莓派 (arm/v7)**。
 
-```bash
-docker run -d \
-  --name cfguard \
-  --restart always \
-  -p 8099:8099 \
-  -v $(pwd)/config.yaml:/app/config/config.yaml \
-  -v $(pwd)/instance:/app/instance \
-  ghcr.io/sck03/cloudflare-dns-failover:latest
-```
+1.  **准备目录 (首次运行)**
+    在你的服务器上，创建一个用于存放持久化数据的目录，例如 `cfguard_data`。
+    ```bash
+    mkdir -p cfguard_data/instance
+    ```
 
-*(注意: 如果使用 Ping 监控，建议添加 `--cap-add=NET_ADMIN` 权限)*
+2.  **首次启动容器 (生成配置)**
+    运行 Docker 命令。注意我们将 `cfguard_data` 目录挂载到了容器内部。
+    ```bash
+    docker run -d \
+      --name cfguard \
+      --restart always \
+      -p 8099:8099 \
+      -v $(pwd)/cfguard_data/config.yaml:/app/config/config.yaml \
+      -v $(pwd)/cfguard_data/instance:/app/instance \
+      ghcr.io/sck03/cloudflare-dns-failover:latest
+    ```
+    > **注意**: 容器在首次启动时，会发现配置不存在，然后自动在 `cfguard_data` 目录下创建一个 `config.yaml` 文件，并立即退出。这是正常现象。
+
+3.  **修改配置**
+    打开你主机上的 `cfguard_data/config.yaml` 文件，根据你的需求填入关键信息，特别是 `jwt_secret` (你的登录密码) 和 `accounts` 下的 Cloudflare API Token。
+
+4.  **正式运行**
+    再次启动容器。
+    ```bash
+    docker start cfguard
+    ```
+    现在，服务将正常运行。你可以通过浏览器访问 `http://<你的服务器IP>:8099` 来使用 Web UI 了。
+
+*(如果使用 Ping 监控，建议在 `docker run` 命令中添加 `--cap-add=NET_ADMIN` 权限)*
 
 ### 方式 2: Docker Compose
 
-1.  克隆仓库:
-    ```bash
-    git clone https://github.com/sck03/cloudflare-dns-failover.git
-    cd cloudflare-dns-failover
-    ```
-2.  创建配置 (复制示例文件):
-    *   复制 `config.example.yaml` 为 `config.yaml` 并修改配置。
-3.  运行:
+1.  克隆仓库并进入目录。
+2.  **首次运行**：
     ```bash
     docker-compose up -d --build
     ```
+    > 这会自动生成 `config.yaml` 文件，然后服务可能会因为配置不完整而退出。
+3.  **修改 `config.yaml`** 文件，填入你的凭证。
+4.  **再次运行** `docker-compose up -d` 即可。
 
 ### 方式 3: 手动编译运行
 
@@ -105,6 +121,9 @@ docker run -d \
 ```bash
 go mod tidy
 CGO_ENABLED=0 go build -ldflags="-s -w" -o cfguard .
+# 首次运行会自动生成 config/config.yaml 并退出
+./cfguard
+# 修改配置后再次运行
 ./cfguard
 ```
 
@@ -112,25 +131,80 @@ CGO_ENABLED=0 go build -ldflags="-s -w" -o cfguard .
 
 ## ⚙️ 配置说明
 
-编辑 `config.yaml` 设置您的监控项。
+`config.yaml` 用于定义应用的静态核心配置。我们采用**配置与数据分离**的最佳实践：
+
+*   **`config.yaml`**: 存储**静态配置**，如服务端口、数据库路径、账号凭证和通知渠道。这些信息在应用启动时加载，通常不应在运行时频繁变动。
+*   **`instance/cfguard.db`**: 这是一个 SQLite 数据库文件，用于存储**动态数据**，即你在 Web UI 中创建和管理的所有**监控策略**。
+
+### 配置文件结构详解
 
 ```yaml
+# 服务器相关配置
 server:
+  # 服务监听端口 (默认 8099)
   port: 8099
+  # 是否开启 Debug 模式 (生产环境建议 false)
+  debug: false
+  # 是否开启登录认证 (强烈建议 true)
   auth_enabled: true
-  jwt_secret: "CHANGE_ME_IN_PRODUCTION" # Web UI 登录密码
+  # JWT 密钥，这同时也是你登录 Web 管理界面的【密码】！生产环境务必修改。
+  jwt_secret: "change-this-secret-key-in-production"
 
-monitors:
-  - name: "生产环境 Web"
-    account: "default"
-    domain: "www.example.com"
-    type: "https"           # Web 服务推荐使用 https
-    target: "https://www.example.com"
-    original_ip: "1.1.1.1"
-    backup_ip: "2.2.2.2"
-    retries: 3              # 连续失败 3 次切换
-    recovery_retries: 2     # 连续成功 2 次恢复
-    interval: 60            # 每 60 秒检测一次
+# 数据库文件路径配置
+database:
+  path: "instance/cfguard.db"
+
+# Cloudflare 账号凭证列表 (支持多账号)
+accounts:
+  - name: "default"  # 账号名称，用于在监控策略中引用
+    # 推荐使用 API Token (权限更细，更安全)
+    # 获取地址: https://dash.cloudflare.com/profile/api-tokens
+    api_token: "YOUR_CLOUDFLARE_API_TOKEN"
+    # 或者使用 Email + Global API Key (旧版方式，不推荐)
+    email: ""
+    api_key: ""
+
+# 通知渠道配置
+notification:
+  dingtalk:
+    enabled: false
+    access_token: ""
+    secret: "" # 可选的加签密钥
+  telegram:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+  email:
+    enabled: false
+    host: "smtp.example.com"
+    port: 465 # 465 (SSL/TLS) 或 587 (STARTTLS)
+    username: "your_email@example.com"
+    password: "your_email_password"
+    to: "admin@example.com"
+
+# 【重要】监控策略初始化列表
+# 注意：此列表仅用于在程序首次启动时，将配置“同步”到数据库。
+# 在那之后，所有的监控项管理（增、删、改）都应在 Web UI 中进行。
+# 为避免重启后 UI 上的删除操作被覆盖（“复活”问题），强烈建议将此列表保持为空。
+# 如果你确实需要通过配置文件预设监控，可以取消下面行的注释并添加你的配置。
+monitors: []
+#  - name: "Web Server Monitor"
+#    account: "default"
+#    domain: "sub.example.com"
+#    zone_id: "your_zone_id_here"
+#    type: "http"
+#    target: "https://sub.example.com"
+#    original_ip: "1.2.3.4"
+#    backup_ip: "5.6.7.8"
+#    interval: 60
+#    # 【高级功能】计划任务轮换 (仅限配置文件)
+#    # UI 界面目前仅支持简化的定时切换，不支持灵活的 Cron 表达式。
+#    schedules:
+#      - cron: "0 8 * * *"      # 每天 08:00 切换到 IP 1.2.3.4
+#        target_ip: "1.2.3.4"
+#      - cron: "0 20 * * *"     # 每天 20:00 切换到 IP 5.6.7.8
+#        target_ip: "5.6.7.8"
+
 ```
 
 ## 🔒 安全性

@@ -68,6 +68,51 @@ func GetZoneRecords(c *gin.Context) {
 	c.JSON(http.StatusOK, records)
 }
 
+func CreateRecord(c *gin.Context) {
+	zoneID := c.Param("zoneId")
+	var payload map[string]interface{}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	acc := GetActiveAccountConfig()
+	record, err := CreateCloudflareRecord(acc, zoneID, payload)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, record)
+}
+
+func UpdateRecord(c *gin.Context) {
+	zoneID := c.Param("zoneId")
+	recordID := c.Param("recordId")
+	var payload map[string]interface{}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	acc := GetActiveAccountConfig()
+	record, err := UpdateCloudflareRecord(acc, zoneID, recordID, payload)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, record)
+}
+
+func DeleteRecord(c *gin.Context) {
+	zoneID := c.Param("zoneId")
+	recordID := c.Param("recordId")
+	acc := GetActiveAccountConfig()
+	err := DeleteCloudflareRecord(acc, zoneID, recordID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
 type ConfigPayload struct {
 	Cloudflare struct {
 		ApiToken string `json:"api_token"`

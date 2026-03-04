@@ -41,52 +41,17 @@ notification:
     password: "your_email_password"
     to: "admin@example.com"
 
-monitors:
-  - name: "Web Server Monitor"
-    account: "default"         # 对应上方 accounts 中的 name
-    domain: "sub.example.com"  # 需要监控的域名
-    zone_id: "your_zone_id_here" # Cloudflare Zone ID
-    cf_record_id: ""           # 留空则自动检测
-    type: "http"               # 监控类型: http, https, 或 ping
-    dns_type: "A"              # DNS 记录类型: A (IPv4), AAAA (IPv6), 或 CNAME
-    target: "https://sub.example.com" # 监控目标 (URL 或 IP)
-    original_ip: "1.2.3.4"     # 主 IP (或 CNAME 域名)
-    original_ip_proxy: false   # 主 IP 是否开启 CDN (云朵图标)
-    backup_ip: "5.6.7.8"       # 备用 IP (或 CNAME 域名)
-    backup_ip_proxy: true      # 备 IP 是否开启 CDN
-    interval: 60               # 检测间隔 (秒)
-    timeout: 5                 # 超时时间 (秒)
-    retries: 3                 # 连续失败次数触发切换
-    recovery_retries: 2        # 连续成功次数触发恢复 (防止网络抖动)
-    schedules:
-      # 可选: 计划任务 IP 轮换
-      - cron: "0 8 * * *"      # 每天 08:00
-        target_ip: "1.2.3.4"
-      - cron: "0 20 * * *"     # 每天 20:00
-        target_ip: "5.6.7.8"
-
-  # 示例 2: 多个域名共用相同的主备 IP (如 example.com 和 www.example.com)
-  # 需要分别添加两个监控项
-  - name: "Main Domain (@)"
-    account: "default"
-    domain: "example.com"      # 根域名
-    zone_id: "your_zone_id_here"
-    type: "http"
-    target: "https://example.com"
-    original_ip: "1.2.3.4"
-    original_ip_proxy: true
-    backup_ip: "5.6.7.8"
-    backup_ip_proxy: true
-    interval: 60
-    
-  - name: "WWW Domain"
-    account: "default"
-    domain: "www.example.com"
-    zone_id: "your_zone_id_here"
-    type: "http"
-    target: "https://www.example.com"
-    original_ip: "1.2.3.4"
-    original_ip_proxy: true
-    backup_ip: "5.6.7.8"
-    backup_ip_proxy: true
-    interval: 60
+# 注意：此列表仅用于在程序首次启动时，将配置“同步”到数据库。
+# 在那之后，所有的监控项管理（增、删、改）都应在 Web UI 中进行。
+# 为避免重启后 UI 上的删除操作被覆盖（“复活”问题），建议将此列表保持为空。
+# 如果你确实需要通过配置文件预设监控，可以取消下面行的注释并添加你的配置。
+monitors: []
+#  - name: "Web Server Monitor"
+#    account: "default"
+#    domain: "sub.example.com"
+#    zone_id: "your_zone_id_here"
+#    type: "http"
+#    target: "https://sub.example.com"
+#    original_ip: "1.2.3.4"
+#    backup_ip: "5.6.7.8"
+#    interval: 60

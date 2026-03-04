@@ -1009,12 +1009,90 @@ class DNSManager {
         });
     }
 
-    // ... (keep editRecord, deleteRecord, showRecordModal, hideRecordModal, submitRecordForm as is) ...
+    // ... (keep openMonitorModal as is) ...
+
+    editRecord(recordId) {
+        const record = this.recordsCache.find(r => r.id === recordId);
+        if (!record) {
+            this.showNotification('未找到该记录', 'error');
+            return;
+        }
+        this.editingRecordId = recordId;
+        this.showRecordModal(record);
+    }
+
+    async deleteRecord(recordId) {
+        if (!confirm('确定要删除这条DNS记录吗？此操作不可恢复。')) return;
+
+        try {
+            await this.apiRequest(`/api/zones/${this.currentZoneId}/records/${recordId}`, { method: 'DELETE' });
+            this.showNotification('DNS记录删除成功', 'success');
+            await this.fetchRecords(this.currentZoneId);
+        } catch (error) {
+            console.error('删除DNS记录失败:', error);
+            this.showNotification(`删除失败: ${error.message || error}`, 'error');
+        }
+    }
+
+    showRecordModal(record) {
+        const modal = document.getElementById('record-modal');
+        if (!modal) return;
+
+        document.getElementById('record-modal-title').textContent = this.editingRecordId ? '编辑DNS记录' : '添加DNS记录';
+        document.getElementById('record-type').value = record.type || 'A';
+        document.getElementById('record-name').value = record.name || '';
+        document.getElementById('record-content').value = record.content || '';
+        document.getElementById('record-ttl').value = record.ttl || 1;
+        document.getElementById('record-proxied').checked = !!record.proxied;
+
+        modal.classList.remove('hidden');
+    }
+
+    hideRecordModal() {
+        const modal = document.getElementById('record-modal');
+        if (modal) modal.classList.add('hidden');
+        this.editingRecordId = null;
+    }
+
+    async submitRecordForm() {
+        const payload = {
+            type: document.getElementById('record-type').value,
+            name: document.getElementById('record-name').value.trim(),
+            content: document.getElementById('record-content').value.trim(),
+            ttl: Number(document.getElementById('record-ttl').value) || 1,
+            proxied: document.getElementById('record-proxied').checked,
+        };
+
+        if (!payload.name || !payload.content) {
+            throw new Error('名称和内容不能为空');
+        }
+
+        if (this.editingRecordId) {
+            // Update existing record
+            await this.apiRequest(`/api/zones/${this.currentZoneId}/records/${this.editingRecordId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+        } else {
+            // Create new record
+            await this.apiRequest(`/api/zones/${this.currentZoneId}/records`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+        }
+
+        this.hideRecordModal();
+        this.showNotification('保存成功', 'success');
+        await this.fetchRecords(this.currentZoneId);
+    }
 
     editMonitor(monitorId) {
-        const monitor = this.monitorsCache.find(m => m.id === monitorId);
+        const monitor = this.monitorsCache.find(m => m.id == monitorId);
         if (!monitor) {
             this.showNotification('未找到该策略', 'error');
+            console.error('Monitor not found in cache with ID:', monitorId);
             return;
         }
         this.editingMonitorId = monitorId;
@@ -1051,7 +1129,8 @@ class DNSManager {
         if (accountSelect) {
             accountSelect.innerHTML = '<option value="">选择 Cloudflare 账号...</option>';
             try {
-                const accounts = await this.apiRequest('/api/cloudflare-accounts');
+                const data = await this.apiRequest('/api/cloudflare-accounts');
+                const accounts = data.accounts || [];
                 if (Array.isArray(accounts)) {
                     accounts.forEach(acc => {
                         const opt = document.createElement('option');
