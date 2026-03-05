@@ -181,12 +181,12 @@ func CheckMonitor(m *Monitor) {
 	isUp := false
 	switch m.Type {
 	case "ping":
-		isUp = CheckPing(checkTarget, m.Timeout)
+		isUp = CheckPing(checkTarget, m.Timeout, m.PingCount)
 	case "http", "https":
 		// Pass OriginalIP to force connection to Primary
 		isUp = CheckHTTP(m.Target, m.Timeout, m.OriginalIP)
 	default:
-		isUp = CheckPing(checkTarget, m.Timeout) // Default
+		isUp = CheckPing(checkTarget, m.Timeout, m.PingCount) // Default
 	}
 
 	// Logic for Failover
@@ -239,18 +239,18 @@ func CheckHTTP(target string, timeout int, forceIP string) bool {
 	return success
 }
 
-func CheckPing(host string, timeout int) bool {
+func CheckPing(host string, timeout int, count int) bool {
 	// Simple Ping implementation using OS command
 	// In production, might want to use a library or raw socket, but permissions can be tricky in docker.
 	// OS command is safer for unprivileged containers if ping is installed.
 
 	// Use context with timeout slightly larger than ping timeout to kill hung processes
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout+2)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout*count+2)*time.Second)
 	defer cancel()
 
-	// Try 3 times, if 1 success then OK. This avoids flakiness.
+	// Try 'count' times, if 1 success then OK. This avoids flakiness.
 	success := false
-	for i := 0; i < 3; i++ {
+	for i := 0; i < count; i++ {
 		var cmd *exec.Cmd
 		timeoutStr := strconv.Itoa(timeout)
 
@@ -290,7 +290,7 @@ func HandleSuccess(m *Monitor) {
 	if m.Status == "Down" {
 		m.SuccCount++
 
-		threshold := m.RecoveryRetries
+		threshold := m.SuccessThreshold
 		if threshold == 0 {
 			threshold = m.Retries // Fallback to failure threshold
 			if threshold == 0 {
@@ -304,6 +304,7 @@ func HandleSuccess(m *Monitor) {
 
 			// Try to switch DNS first
 			if UpdateCloudflareDNS(m, m.OriginalIP) {
+				RecordSwitchEvent(m, m.CurrentIP, m.OriginalIP, "auto", false)
 				m.Status = "Normal"
 				m.SuccCount = 0
 				m.CurrentIP = m.OriginalIP
@@ -331,6 +332,7 @@ func HandleFailure(m *Monitor) {
 
 			// Try to switch DNS first
 			if UpdateCloudflareDNS(m, m.BackupIP) {
+				RecordSwitchEvent(m, m.CurrentIP, m.BackupIP, "auto", true)
 				m.Status = "Down"
 				m.FailCount = 0
 				m.CurrentIP = m.BackupIP

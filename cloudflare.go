@@ -98,10 +98,11 @@ func UpdateCloudflareDNS(m *Monitor, targetIP string) bool {
 	}
 
 	// Determine proxy status based on target IP
-	if targetIP == m.OriginalIP {
-		payload["proxied"] = m.OriginalIPProxy
-	} else if targetIP == m.BackupIP {
-		payload["proxied"] = m.BackupIPProxy
+	switch targetIP {
+	case m.OriginalIP:
+		payload["proxied"] = m.OriginalIPCDNEnabled
+	case m.BackupIP:
+		payload["proxied"] = m.BackupIPCDNEnabled
 	}
 
 	jsonPayload, _ := json.Marshal(payload)
@@ -196,10 +197,12 @@ func FetchCloudflareRecordID(m *Monitor) (string, error) {
 }
 
 type CloudflareZone struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Paused bool   `json:"paused"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Status    string    `json:"status"`
+	Paused    bool      `json:"paused"`
+	Type      string    `json:"type"`
+	CreatedOn time.Time `json:"created_on"`
 }
 
 type CloudflareRecord struct {
@@ -298,11 +301,11 @@ func CreateCloudflareRecord(acc *AccountConfig, zoneID string, payload map[strin
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	var result struct {
-		Success bool             `json:"success"`
+		Success bool `json:"success"`
 		Errors  []struct {
 			Message string `json:"message"`
 		} `json:"errors"`
-		Result  CloudflareRecord `json:"result"`
+		Result CloudflareRecord `json:"result"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %v", err)
@@ -323,7 +326,7 @@ func UpdateCloudflareRecord(acc *AccountConfig, zoneID, recordID string, payload
 	}
 	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s", zoneID, recordID)
 	jsonPayload, _ := json.Marshal(payload)
-	req, err := newCloudflareRequest("PUT", url, bytes.NewBuffer(jsonPayload), acc)
+	req, err := newCloudflareRequest("PATCH", url, bytes.NewBuffer(jsonPayload), acc)
 	if err != nil {
 		return nil, err
 	}
@@ -334,11 +337,11 @@ func UpdateCloudflareRecord(acc *AccountConfig, zoneID, recordID string, payload
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	var result struct {
-		Success bool             `json:"success"`
+		Success bool `json:"success"`
 		Errors  []struct {
 			Message string `json:"message"`
 		} `json:"errors"`
-		Result  CloudflareRecord `json:"result"`
+		Result CloudflareRecord `json:"result"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %v", err)

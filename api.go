@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,11 +14,64 @@ import (
 	"gorm.io/gorm"
 )
 
+func GetOfflineHotStats() []OfflineHotStat {
+	var stats []OfflineHotStat
+	// Get all switch events to backup in the last 24 hours
+	twentyFourHoursAgo := time.Now().Add(-24 * time.Hour)
+	var events []SwitchEvent
+	DB.Where("to_backup = ? AND timestamp > ?", true, twentyFourHoursAgo).Find(&events)
+
+	// In-memory aggregation
+	statsMap := make(map[string]*OfflineHotStat)
+	for _, event := range events {
+		key := fmt.Sprintf("%d-%s", event.MonitorID, event.ToIP)
+		if stat, ok := statsMap[key]; ok {
+			stat.Count++
+			if event.Timestamp.After(stat.LastAt) {
+				stat.LastAt = event.Timestamp
+			}
+		} else {
+			statsMap[key] = &OfflineHotStat{
+				MonitorID: event.MonitorID,
+				Name:      event.Name,
+				IP:        event.ToIP,
+				Role:      "backup",
+				Count:     1,
+				LastAt:    event.Timestamp,
+			}
+		}
+	}
+
+	for _, stat := range statsMap {
+		if stat.Count >= 3 { // As per the UI "掉线 ≥ 3 次"
+			stats = append(stats, *stat)
+		}
+	}
+
+	// Sort by count descending
+	sort.Slice(stats, func(i, j int) bool {
+		return stats[i].Count > stats[j].Count
+	})
+
+	return stats
+}
+
 // --- Controllers ---
 
 func GetMonitors(c *gin.Context) {
 	var monitors []Monitor
 	DB.Preload("Schedules").Find(&monitors)
+
+	for i := range monitors {
+		if len(monitors[i].Schedules) > 0 {
+			monitors[i].ScheduleEnabled = true
+			// Simplification: assume format "0 H * * *"
+			var hour int
+			fmt.Sscanf(monitors[i].Schedules[0].Cron, "0 %d * * *", &hour)
+			monitors[i].ScheduleHours = hour
+		}
+	}
+
 	c.JSON(http.StatusOK, monitors)
 }
 
@@ -28,12 +82,17 @@ func GetStatus(c *gin.Context) {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 
+	var history []SwitchEvent
+	DB.Order("timestamp desc").Limit(50).Find(&history)
+
 	c.JSON(http.StatusOK, gin.H{
 		"system": gin.H{
 			"goroutines": runtime.NumGoroutine(),
 			"mem_alloc":  mem.Alloc,
 		},
-		"monitors": monitors,
+		"monitors":    monitors,
+		"history":     history,
+		"offline_hot": GetOfflineHotStats(),
 	})
 }
 
@@ -429,16 +488,18 @@ func UpdateMonitor(c *gin.Context) {
 	monitor.Name = input.Name
 	monitor.AccountName = input.Account
 	monitor.Target = input.Target
-	monitor.Type = input.Type
+	monitor.Type = input.Type // This was the missing line
 	monitor.DNSType = input.DNSType
 	monitor.Interval = input.Interval
 	monitor.Timeout = input.Timeout
 	monitor.Retries = input.Retries
-	monitor.RecoveryRetries = input.RecoveryRetries
+	monitor.PingCount = input.PingCount
+	monitor.SuccessThreshold = input.SuccessThreshold
 	monitor.OriginalIP = input.OriginalIP
-	monitor.OriginalIPProxy = input.OriginalIPProxy
+	monitor.OriginalIPCDNEnabled = input.OriginalIPCDNEnabled
 	monitor.BackupIP = input.BackupIP
-	monitor.BackupIPProxy = input.BackupIPProxy
+	monitor.BackupIPCDNEnabled = input.BackupIPCDNEnabled
+	monitor.CFDomain = input.Domain
 
 	// Handle critical field changes that require re-fetching Record ID
 	shouldFetchID := false
@@ -558,6 +619,7 @@ func RestoreMonitor(c *gin.Context) {
 	monitor.LastCheck = time.Now()
 
 	if UpdateCloudflareDNS(&monitor, monitor.OriginalIP) {
+		RecordSwitchEvent(&monitor, monitor.CurrentIP, monitor.OriginalIP, "manual", false)
 		SendNotification(fmt.Sprintf("✅ 手动恢复: %s 已切回主 IP %s", monitor.Name, monitor.OriginalIP))
 	}
 

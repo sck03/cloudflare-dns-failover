@@ -50,7 +50,7 @@ func InitDB() {
 	}
 
 	// Auto Migrate
-	err = DB.AutoMigrate(&Monitor{}, &Schedule{})
+	err = DB.AutoMigrate(&Monitor{}, &Schedule{}, &SwitchEvent{})
 	if err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
@@ -82,21 +82,22 @@ func SeedMonitors() {
 
 			// Use explicit update to ensure we don't overwrite ID or State
 			DB.Model(&existing).Updates(map[string]interface{}{
-				"account_name":     configMonitor.AccountName,
-				"target":           configMonitor.Target,
-				"type":             configMonitor.Type,
-				"dns_type":         configMonitor.DNSType,
-				"interval":         configMonitor.Interval,
-				"timeout":          configMonitor.Timeout,
-				"retries":          configMonitor.Retries,
-				"recovery_retries": configMonitor.RecoveryRetries,
-				"original_ip":      configMonitor.OriginalIP,
-				"original_ip_proxy": configMonitor.OriginalIPProxy,
-				"backup_ip":        configMonitor.BackupIP,
-				"backup_ip_proxy":  configMonitor.BackupIPProxy,
-				"cf_zone_id":       configMonitor.CFZoneID,
-				"cf_record_id":     configMonitor.CFRecordID,
-				"cf_domain":        configMonitor.CFDomain,
+				"account_name":            configMonitor.AccountName,
+				"target":                  configMonitor.Target,
+				"type":                    configMonitor.Type,
+				"dns_type":                configMonitor.DNSType,
+				"interval":                configMonitor.Interval,
+				"timeout":                 configMonitor.Timeout,
+				"retries":                 configMonitor.Retries,
+				"ping_count":              configMonitor.PingCount,
+				"success_threshold":       configMonitor.SuccessThreshold,
+				"original_ip":             configMonitor.OriginalIP,
+				"original_ip_cdn_enabled": configMonitor.OriginalIPCDNEnabled,
+				"backup_ip":               configMonitor.BackupIP,
+				"backup_ip_cdn_enabled":   configMonitor.BackupIPCDNEnabled,
+				"cf_zone_id":              configMonitor.CFZoneID,
+				"cf_record_id":            configMonitor.CFRecordID,
+				"cf_domain":               configMonitor.CFDomain,
 			})
 
 			// Sync Schedules
@@ -131,4 +132,17 @@ func SeedMonitors() {
 		}
 	}
 	log.Println("Monitor sync complete.")
+}
+
+func RecordSwitchEvent(monitor *Monitor, fromIP, toIP, eventType string, toBackup bool) {
+	event := SwitchEvent{
+		MonitorID: monitor.ID,
+		Name:      monitor.Name,
+		FromIP:    fromIP,
+		ToIP:      toIP,
+		ToBackup:  toBackup,
+		Type:      eventType,
+		Timestamp: time.Now(),
+	}
+	DB.Create(&event)
 }
