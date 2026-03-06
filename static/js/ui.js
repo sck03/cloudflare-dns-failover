@@ -18,3 +18,38 @@ export function updateTime() {
         `${hours}h ${minutes}m ${seconds}s`;
 }
 
+export function switchSection(section) {
+    ['dashboard', 'domains', 'strategies', 'settings'].forEach(s => {
+        const navItem = document.getElementById(`nav-${s}`);
+        const sectionEl = document.getElementById(`section-${s}`);
+        
+        if (navItem) {
+            if (s === section) {
+                navItem.classList.add('active');
+            } else {
+                navItem.classList.remove('active');
+            }
+        }
+        
+        if (sectionEl) {
+            if (s === section) {
+                sectionEl.classList.remove('hidden');
+                sectionEl.classList.add('fade-in');
+            } else {
+                sectionEl.classList.add('hidden');
+            }
+        }
+    });
+
+    const titles = {
+        dashboard: '控制面板',
+        domains: '域名管理',
+        strategies: '监控策略',
+        settings: '系统设置'
+    };
+    document.getElementById('section-title').textContent = titles[section] || '控制面板';
+
+    // Dispatch a custom event to notify that the view has changed
+    document.dispatchEvent(new CustomEvent('viewchanged', { detail: { section } }));
+}
+

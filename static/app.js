@@ -1,6 +1,6 @@
 import { state } from './js/state.js';
 import { 
-    updateTime, loadDashboardData, fetchZones, fetchMonitors, loadSettings, 
+    updateTime, switchSection, loadDashboardData, fetchZones, fetchMonitors, loadSettings, 
     viewRecords, hideRecords, openRecordModal, openMonitorModal, openAccountModal, 
     editRecord, deleteRecord, editMonitor, deleteMonitor, activateAccount, switchAccount, 
     openRestoreModal, openScheduleSwitchModal, updateAccountSwitcher
@@ -53,6 +53,7 @@ class DNSManager {
 
         this.startMonitorPolling();
 
+        this.bindViewChange();
         bindEvents();
     }
 
@@ -63,8 +64,29 @@ class DNSManager {
             if (navItem) {
                 navItem.addEventListener('click', (e) => {
                     e.preventDefault();
-                    this.switchSection(section);
+                    switchSection(section);
                 });
+            }
+        });
+    }
+
+    bindViewChange() {
+        document.addEventListener('viewchanged', (e) => {
+            const section = e.detail.section;
+            switch(section) {
+                case 'dashboard':
+                    loadDashboardData();
+                    break;
+                case 'domains':
+                    updateAccountSwitcher();
+                    fetchZones();
+                    break;
+                case 'strategies':
+                    fetchMonitors();
+                    break;
+                case 'settings':
+                    loadSettings();
+                    break;
             }
         });
     }
@@ -78,53 +100,7 @@ class DNSManager {
         }, 30000);
     }
 
-    switchSection(section) {
-        ['dashboard', 'domains', 'strategies', 'settings'].forEach(s => {
-            const navItem = document.getElementById(`nav-${s}`);
-            const sectionEl = document.getElementById(`section-${s}`);
-            
-            if (navItem) {
-                if (s === section) {
-                    navItem.classList.add('active');
-                } else {
-                    navItem.classList.remove('active');
-                }
-            }
-            
-            if (sectionEl) {
-                if (s === section) {
-                    sectionEl.classList.remove('hidden');
-                    sectionEl.classList.add('fade-in');
-                } else {
-                    sectionEl.classList.add('hidden');
-                }
-            }
-        });
-    
-        const titles = {
-            dashboard: '控制面板',
-            domains: '域名管理',
-            strategies: '监控策略',
-            settings: '系统设置'
-        };
-        document.getElementById('section-title').textContent = titles[section] || '控制面板';
-    
-        switch(section) {
-            case 'dashboard':
-                loadDashboardData();
-                break;
-            case 'domains':
-                updateAccountSwitcher();
-                fetchZones();
-                break;
-            case 'strategies':
-                fetchMonitors();
-                break;
-            case 'settings':
-                loadSettings();
-                break;
-        }
-    }
+
 }
 
 let dnsManager;
