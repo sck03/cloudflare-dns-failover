@@ -41,42 +41,20 @@ class DNSManager {
     }
 
     init() {
-        this.updateTime();
-        setInterval(() => this.updateTime(), 1000);
+        updateTime();
+        setInterval(() => updateTime(), 1000);
 
         this.initNavigation();
 
-        this.loadDashboardData();
-        this.fetchZones();
-        this.fetchMonitors();
-        this.loadSettings();
+        loadDashboardData();
+        fetchZones();
+        fetchMonitors();
+        loadSettings();
 
         this.startMonitorPolling();
 
-        this.bindEvents();
+        bindEvents();
     }
-
-    updateTime = updateTime;
-    switchSection = switchSection;
-    loadDashboardData = loadDashboardData;
-    fetchZones = fetchZones;
-    fetchMonitors = fetchMonitors;
-    loadSettings = loadSettings;
-    viewRecords = viewRecords;
-    hideRecords = hideRecords;
-    openRecordModal = openRecordModal;
-    openMonitorModal = openMonitorModal;
-    openAccountModal = openAccountModal;
-    editRecord = editRecord;
-    deleteRecord = deleteRecord;
-    editMonitor = editMonitor;
-    deleteMonitor = deleteMonitor;
-    activateAccount = activateAccount;
-    switchAccount = switchAccount;
-    openRestoreModal = openRestoreModal;
-    openScheduleSwitchModal = openScheduleSwitchModal;
-    updateAccountSwitcher = updateAccountSwitcher;
-    bindEvents = bindEvents;
 
     initNavigation() {
         const sections = ['dashboard', 'domains', 'strategies', 'settings'];
@@ -85,7 +63,7 @@ class DNSManager {
             if (navItem) {
                 navItem.addEventListener('click', (e) => {
                     e.preventDefault();
-                    this.switchSection(section);
+                    switchSection(section);
                 });
             }
         });
