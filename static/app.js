@@ -96,7 +96,7 @@ class DNSManager {
         state.monitorInterval = setInterval(() => {
             if (document.getElementById('section-dashboard') && 
                 !document.getElementById('section-dashboard').classList.contains('hidden')) {
-                loadDashboardData();
+                this.loadDashboardData();
             }
         }, 30000);
     }
