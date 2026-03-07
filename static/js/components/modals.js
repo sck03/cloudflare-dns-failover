@@ -85,25 +85,30 @@ export async function submitRecordForm() {
 }
 
 // --- Monitor Modal --- //
-export async function openMonitorModal() {
-    state.editingMonitorId = null;
-    await showMonitorModal({
-        name: '',
-        account_name: '',
-        zone_id: '',
-        cf_domain: '',
-        type: 'ping',
-        target: '',
-        original_ip: '',
-        backup_ip: '',
-        retries: 3,
-        success_threshold: 2,
-        interval: 60,
-        timeout: 2,
-        ping_count: 3,
-        original_ip_cdn_enabled: false,
-        backup_ip_cdn_enabled: true
-    });
+export async function openMonitorModal(monitor) {
+    if (monitor) {
+        state.editingMonitorId = monitor.id;
+        await showMonitorModal(monitor);
+    } else {
+        state.editingMonitorId = null;
+        await showMonitorModal({
+            name: '',
+            account_name: '',
+            zone_id: '',
+            cf_domain: '',
+            type: 'ping',
+            target: '',
+            original_ip: '',
+            backup_ip: '',
+            retries: 3,
+            success_threshold: 2,
+            interval: 60,
+            timeout: 2,
+            ping_count: 3,
+            original_ip_cdn_enabled: false,
+            backup_ip_cdn_enabled: false
+        });
+    }
 }
 
 export function editMonitor(monitorId) {
