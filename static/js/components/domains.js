@@ -106,7 +106,7 @@ export function hideRecords() {
     state.currentZoneName = null;
 }
 
-async function fetchRecords(zoneId) {
+export async function fetchRecords(zoneId) {
     try {
         const records = await apiRequest(`/api/zones/${zoneId}/records`);
         state.recordsCache = Array.isArray(records) ? records : [];
