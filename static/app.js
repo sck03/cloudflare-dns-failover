@@ -36,6 +36,7 @@ class DNSManager {
     }
 
     init() {
+        const self = this;
         Object.assign(this, ui);
 
         console.log("[APP] Initializing DNSManager...");
@@ -75,17 +76,17 @@ class DNSManager {
             console.log(`[APP] 'viewchanged' event received for section: ${section}`);
             switch(section) {
                 case 'dashboard':
-                    this.loadDashboardData();
+                    self.loadDashboardData();
                     break;
                 case 'domains':
-                    this.updateAccountSwitcher();
-                    this.fetchZones();
+                    self.updateAccountSwitcher();
+                    self.fetchZones();
                     break;
                 case 'strategies':
-                    this.fetchMonitors();
+                    self.fetchMonitors();
                     break;
                 case 'settings':
-                    this.loadSettings();
+                    self.loadSettings();
                     break;
             }
         });
