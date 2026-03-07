@@ -1,6 +1,7 @@
 import { state } from '../state.js';
 import { apiRequest } from '../api.js';
 import { showNotification } from './notifications.js';
+import { openMonitorModal } from './modals.js';
 
 export async function fetchMonitors() {
     try {
