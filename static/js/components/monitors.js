@@ -22,6 +22,13 @@ export async function fetchMonitors() {
     }
 }
 
+export function editMonitor(monitorId) {
+    const monitor = state.monitorsCache.find(m => m.id == monitorId);
+    if (monitor) {
+        openMonitorModal(monitor);
+    }
+}
+
 function renderOfflineHot(items) {
     const container = document.getElementById('strategy-offline-hot');
     if (!container) return;
