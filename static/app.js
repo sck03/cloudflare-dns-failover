@@ -1,10 +1,5 @@
 import { state } from './js/state.js';
-import { 
-    updateTime, switchSection, loadDashboardData, fetchZones, fetchMonitors, loadSettings, 
-    viewRecords, hideRecords, openRecordModal, openMonitorModal, openAccountModal, 
-    editRecord, deleteRecord, editMonitor, deleteMonitor, activateAccount, switchAccount, 
-    openRestoreModal, openScheduleSwitchModal, updateAccountSwitcher
-} from './js/ui.js';
+import * as ui from './js/ui.js';
 import { bindEvents } from './js/events.js';
 
 class DNSManager {
@@ -41,16 +36,18 @@ class DNSManager {
     }
 
     init() {
+        Object.assign(this, ui);
+
         console.log("[APP] Initializing DNSManager...");
-        updateTime();
-        setInterval(() => updateTime(), 1000);
+        this.updateTime();
+        setInterval(() => this.updateTime(), 1000);
 
         this.initNavigation();
 
-        loadDashboardData();
-        fetchZones();
-        fetchMonitors();
-        loadSettings();
+        this.loadDashboardData();
+        this.fetchZones();
+        this.fetchMonitors();
+        this.loadSettings();
 
         this.startMonitorPolling();
 
@@ -66,7 +63,7 @@ class DNSManager {
                 navItem.addEventListener('click', (e) => {
                     e.preventDefault();
                     console.log(`[APP] Navigation click detected for section: ${section}`);
-                    switchSection(section);
+                    this.switchSection(section);
                 });
             }
         });
@@ -78,17 +75,17 @@ class DNSManager {
             console.log(`[APP] 'viewchanged' event received for section: ${section}`);
             switch(section) {
                 case 'dashboard':
-                    loadDashboardData();
+                    this.loadDashboardData();
                     break;
                 case 'domains':
-                    updateAccountSwitcher();
-                    fetchZones();
+                    this.updateAccountSwitcher();
+                    this.fetchZones();
                     break;
                 case 'strategies':
-                    fetchMonitors();
+                    this.fetchMonitors();
                     break;
                 case 'settings':
-                    loadSettings();
+                    this.loadSettings();
                     break;
             }
         });

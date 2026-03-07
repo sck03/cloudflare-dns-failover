@@ -1,9 +1,34 @@
-export * from './components/notifications.js';
-export * from './components/dashboard.js';
-export * from './components/domains.js';
-export * from './components/monitors.js';
-export * from './components/modals.js';
-export * from './components/settings.js';
+import { showNotification } from './components/notifications.js';
+import { loadDashboardData } from './components/dashboard.js';
+import { fetchZones, viewRecords, hideRecords, fetchRecords, deleteRecord } from './components/domains.js';
+import { fetchMonitors, editMonitor, deleteMonitor } from './components/monitors.js';
+import { openRecordModal, editRecord, openMonitorModal, openAccountModal, openRestoreModal, openScheduleSwitchModal } from './components/modals.js';
+import { loadSettings, activateAccount, switchAccount, updateAccountSwitcher, editAccount as editAccountFromSettings, deleteAccount } from './components/settings.js';
+
+export {
+    showNotification,
+    loadDashboardData,
+    fetchZones,
+    viewRecords,
+    hideRecords,
+    fetchRecords,
+    deleteRecord,
+    fetchMonitors,
+    editMonitor,
+    deleteMonitor,
+    openRecordModal,
+    editRecord,
+    openMonitorModal,
+    openAccountModal,
+    openRestoreModal,
+    openScheduleSwitchModal,
+    loadSettings,
+    activateAccount,
+    switchAccount,
+    updateAccountSwitcher,
+    editAccountFromSettings as editAccount,
+    deleteAccount
+};
 
 export function updateTime() {
     const now = new Date();

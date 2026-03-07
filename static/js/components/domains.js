@@ -106,6 +106,21 @@ export function hideRecords() {
     state.currentZoneName = null;
 }
 
+export async function deleteRecord(recordId) {
+    if (!confirm('确定要删除这条DNS记录吗？')) {
+        return;
+    }
+
+    try {
+        await apiRequest(`/api/zones/${state.currentZoneId}/records/${recordId}`, { method: 'DELETE' });
+        showNotification('DNS记录删除成功', 'success');
+        await fetchRecords(state.currentZoneId);
+    } catch (error) {
+        console.error('删除DNS记录失败:', error);
+        showNotification('删除DNS记录失败', 'error');
+    }
+}
+
 export async function fetchRecords(zoneId) {
     try {
         const records = await apiRequest(`/api/zones/${zoneId}/records`);
