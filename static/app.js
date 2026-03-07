@@ -41,6 +41,7 @@ class DNSManager {
     }
 
     init() {
+        console.log("[APP] Initializing DNSManager...");
         updateTime();
         setInterval(() => updateTime(), 1000);
 
@@ -64,6 +65,7 @@ class DNSManager {
             if (navItem) {
                 navItem.addEventListener('click', (e) => {
                     e.preventDefault();
+                    console.log(`[APP] Navigation click detected for section: ${section}`);
                     switchSection(section);
                 });
             }
@@ -73,6 +75,7 @@ class DNSManager {
     bindViewChange() {
         document.addEventListener('viewchanged', (e) => {
             const section = e.detail.section;
+            console.log(`[APP] 'viewchanged' event received for section: ${section}`);
             switch(section) {
                 case 'dashboard':
                     loadDashboardData();

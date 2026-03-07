@@ -19,6 +19,7 @@ export function updateTime() {
 }
 
 export function switchSection(section) {
+    console.log(`[UI] switchSection function called for: ${section}`);
     ['dashboard', 'domains', 'strategies', 'settings'].forEach(s => {
         const navItem = document.getElementById(`nav-${s}`);
         const sectionEl = document.getElementById(`section-${s}`);
@@ -50,6 +51,7 @@ export function switchSection(section) {
     document.getElementById('section-title').textContent = titles[section] || '控制面板';
 
     // Dispatch a custom event to notify that the view has changed
+    console.log(`[UI] Dispatching 'viewchanged' event for: ${section}`);
     document.dispatchEvent(new CustomEvent('viewchanged', { detail: { section } }));
 }
 
