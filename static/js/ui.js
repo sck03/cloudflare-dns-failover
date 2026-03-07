@@ -1,3 +1,4 @@
+import { state } from './state.js';
 import { showNotification } from './components/notifications.js';
 import { loadDashboardData } from './components/dashboard.js';
 import { fetchZones, viewRecords, hideRecords, fetchRecords, deleteRecord } from './components/domains.js';
