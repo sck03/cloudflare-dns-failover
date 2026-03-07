@@ -74,6 +74,10 @@ class DNSManager {
         document.addEventListener('viewchanged', (e) => {
             const section = e.detail.section;
             console.log(`[APP] 'viewchanged' event received for section: ${section}`);
+
+            console.log('[DEBUG] Inspecting self object:', self);
+            console.log('[DEBUG] Inspecting self.fetchMonitors:', self.fetchMonitors);
+
             switch(section) {
                 case 'dashboard':
                     self.loadDashboardData();
