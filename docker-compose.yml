@@ -1,18 +1,16 @@
-version: '3.8'
-
 services:
   cfguard:
-    build: .
+    image: ghcr.io/sck03/cloudflare-dns-failover:latest
     container_name: cfguard
+    init: true
     restart: unless-stopped
+    stop_grace_period: 30s
     ports:
       - "8099:8099"
     volumes:
-      - ./config.yaml:/app/config/config.yaml
+      - ./config:/app/config
       - ./instance:/app/instance
     environment:
-      - TZ=Asia/Shanghai
-    # capabilities required for ping in some environments
+      TZ: Asia/Shanghai
     cap_add:
-      - NET_ADMIN
       - NET_RAW

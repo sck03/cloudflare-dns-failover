@@ -1,225 +1,129 @@
-# cloudflare-dns-failover (Go 版)
+# Cloudflare DNS Failover / CFGuard
 
-**cloudflare-dns-failover** 是一个企业级、高性能的 Cloudflare DNS 故障转移与监控解决方案，基于 **Go 1.23+** 重构。
-核心代码经过深度优化，内置 **HTTP 连接池**、**SQLite WAL 模式**、**智能防堆积调度 (Skip-if-busy)**、**优雅停机 (Graceful Shutdown)** 与 **事务级数据一致性保护**，确保在高并发监控下的极致性能与稳定性。
+[![Build and publish](https://github.com/sck03/cloudflare-dns-failover/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/sck03/cloudflare-dns-failover/actions/workflows/docker-publish.yml)
 
+用 Go 监控主、备源站，并在故障时更新 Cloudflare DNS。提供 Web 管理、计划切换、多账号、IPv4 / IPv6 / CNAME，以及钉钉、Telegram、邮件通知。
 
-## ✨ 核心优势
+当前工具链为 **Go 1.27.2**；GitHub Actions 版本于 **2026-10-13** 对照官方稳定发行核实，固定到对应提交。项目使用 Go 标准库 HTTP 路由、SQLite 和独立的检测 / 决策 / DNS 模块。
 
-| 功能特性 | 旧版 Python | **CFGuard (Go)** |
-| :--- | :--- | :--- |
-| **内存占用** | ~80MB+ | **< 15MB** (极轻量) |
-| **CPU 占用** | 高 (解释器开销) | **~0%** (编译型二进制) |
-| **部署方式** | 复杂环境依赖 | **单文件 / 极小 Docker 镜像** |
-| **多账号支持** | ❌ 单账号 | **✅ 支持多个 Cloudflare 账号** |
-| **IPv6 支持** | ❌ 仅 IPv4 | **✅ A (IPv4), AAAA (IPv6), CNAME** |
-| **安全管理** | ❌ 无 | **✅ JWT 登录认证 (Web 界面)** |
-| **消息通知** | ❌ 基础 | **✅ 钉钉, Telegram, 邮件 (SSL/TLS)** |
-| **计划任务** | ✅ 简单 | **✅ Cron 表达式精准调度 (防重叠)** |
-| **防抖动机制** | ❌ 无 | **✅ 成功阈值 (恢复重试次数)** |
-| **架构支持** | ❌ 仅 x86 | **✅ amd64, arm64, arm/v7 (树莓派)** |
+**网站监控应选 HTTP/HTTPS。** Ping 只能证明网络可达，不能发现网站返回 500、502、503 等应用故障。请填写真实源站地址，使用能反映业务状态的健康检查 URL。
 
-## 🌟 主要功能
+## 切换行为
 
-1.  **自动故障转移 (Failover)**
-    *   通过 **ICMP Ping** (L3) 或 **HTTP/HTTPS** (L7) 监控您的服务器。
-    *   **智能 Ping**: 自动处理 URL 前缀，支持域名与 IP 直连检测。
-    *   一旦检测到故障（如 500/502 错误或 Ping 不通），自动将 Cloudflare DNS 解析切换到备用 IP/域名。
-    *   **零停机**: 极速响应，确保服务高可用。
+1. 同时检测主、备源站。HTTP 保留 URL 中的 Host 和 TLS SNI，连接指定源站，不跟随已经切换的业务 DNS。
+2. 当前源站连续失败达到 `retries`，且另一端健康时，才发起切换。主备都失败时保留 DNS，并显示故障。
+3. Cloudflare 必须同时返回成功状态和符合请求的记录内容、代理状态，程序才提交本地状态和成功事件。失败会保留原状态，在后续检测中重试。
+4. 优先源站连续恢复达到 `success_threshold` 后切回。若当前源站也已达到故障阈值，可提前切回本次检测健康的优先源站。
+5. 手动和定时切换同样先检查目标；成功后将目标保存为优先地址，继续自动故障保护。默认优先地址为主地址。
 
-2.  **智能恢复 (Failback)**
-    *   当主服务器恢复正常后，自动切回主 IP。
-    *   **防抖动保护**: 可配置 `recovery_retries`，要求连续 N 次检测成功才恢复，避免网络波动导致频繁切换。
-    *   **精准检测**: 即使 DNS 已切换到备用 IP，系统仍会强制解析并监控**主 IP**，确保只有主服务真正恢复时才切回，避免 DNS 缓存导致的误判。
+启动后和每五分钟核对一次 Cloudflare 实际记录；修改策略或切换失败会触发重新核对。配置 `dns_ttl` 后，会在当前源站健康时提前更新 TTL。未知记录、重复记录无法唯一定位、账号缺失等情况会显示具体错误。
 
-3.  **计划任务轮换 (Scheduled Rotation)**
-    *   使用 Cron 表达式在特定时间自动切换 IP（例如：夜间切换到低成本服务器）。
-    *   **优雅停机**: 服务重启或关闭时，自动等待所有正在运行的检测任务完成，防止数据不一致。
-    *   示例: `0 8 * * *` (每天早上 8:00 切换)。
+**DNS 切换有传播时间。** 检测间隔、连续失败阈值、API 耗时、旧 TTL、客户端缓存及已有连接都会影响恢复速度。本项目不承诺零中断；降低 TTL 也不能撤回客户端已缓存的旧记录。详见[故障排查](docs/OPERATIONS.md)。
 
-4.  **全功能管理**
-    *   **多账号**: 在一个地方管理无限个 Cloudflare 账号和域名。
-    *   **自动发现**: 输入域名即可自动获取 `Record ID`。
-    *   **Web 控制台**: 现代化的响应式 UI，实时查看状态和修改配置。
+## 使用 GitHub 构建的镜像
 
-## � 最佳实践 (Best Practices)
-
-1.  **配置 `original_ip` (强烈推荐)**
-    *   虽然 `original_ip` 是可选的，但**强烈建议**您填写主服务器的真实 IP。
-    *   如果不填写，系统在 DNS 切换到备用 IP 后，可能会继续监控备用 IP（因为它变成了域名解析的目标），导致误判主服务器已恢复（Flapping）。
-    *   填写 `original_ip` 后，系统会强制直接连接该 IP 进行检测，确保监控结果的准确性。
-
-2.  **合理设置 `interval` 与 `timeout`**
-    *   建议 `interval` (检测间隔) 大于 `timeout` (超时时间) + 重试耗时。
-    *   例如：`interval: 60`, `timeout: 5`, `retries: 3` 是一个稳健的配置。
-
-3.  **使用 HTTPS 监控**
-    *   对于 Web 服务，优先使用 `type: https`，它不仅能检测网络连通性，还能验证 Web 服务器（Nginx/Apache）是否正常响应。
-
-## 📦 项目结构
-
-*   `api.go`: RESTful API 路由与控制器 (Gin)
-*   `monitor.go`: 核心监控逻辑、调度器与 HTTP 连接池
-*   `cloudflare.go`: Cloudflare API 交互封装
-*   `notification.go`: 异步消息通知服务 (DingTalk, Telegram, Email)
-*   `database.go`: SQLite 数据库初始化与 WAL 模式配置
-*   `models.go`: 数据模型定义与默认值处理
-*   `main.go`: 程序入口与优雅停机处理
-
-## 🚀 快速开始
-
-### 方式 1: Docker (推荐)
-
-支持 **PC (amd64)**, **Mac M1/M2 (arm64)**, 和 **树莓派 (arm/v7)**。
-
-1.  **准备目录 (首次运行)**
-    在你的服务器上，创建一个用于存放持久化数据的目录，例如 `cfguard_data`。
-    ```bash
-    mkdir -p cfguard_data/instance
-    ```
-
-2.  **首次启动容器 (生成配置)**
-    运行 Docker 命令。注意我们将 `cfguard_data` 目录挂载到了容器内部。
-    ```bash
-    docker run -d \
-      --name cfguard \
-      --restart always \
-      -p 8099:8099 \
-      -v $(pwd)/cfguard_data/config.yaml:/app/config/config.yaml \
-      -v $(pwd)/cfguard_data/instance:/app/instance \
-      ghcr.io/sck03/cloudflare-dns-failover:latest
-    ```
-    > **注意**: 容器在首次启动时，会发现配置不存在，然后自动在 `cfguard_data` 目录下创建一个 `config.yaml` 文件，并立即退出。这是正常现象。
-
-3.  **修改配置**
-    打开你主机上的 `cfguard_data/config.yaml` 文件，根据你的需求填入关键信息，特别是 `jwt_secret` (你的登录密码) 和 `accounts` 下的 Cloudflare API Token。
-
-4.  **正式运行**
-    再次启动容器。
-    ```bash
-    docker start cfguard
-    ```
-    现在，服务将正常运行。你可以通过浏览器访问 `http://<你的服务器IP>:8099` 来使用 Web UI 了。
-
-*(如果使用 Ping 监控，建议在 `docker run` 命令中添加 `--cap-add=NET_ADMIN` 权限)*
-
-### 方式 2: Docker Compose
-
-1.  克隆仓库并进入目录。
-2.  **首次运行**：
-    ```bash
-    docker-compose up -d --build
-    ```
-    > 这会自动生成 `config.yaml` 文件，然后服务可能会因为配置不完整而退出。
-3.  **修改 `config.yaml`** 文件，填入你的凭证。
-4.  **再次运行** `docker-compose up -d` 即可。
-
-### 方式 3: 手动编译运行
-
-需要 Go 1.23+:
+首次安装：
 
 ```bash
-go mod tidy
-CGO_ENABLED=0 go build -ldflags="-s -w" -o cfguard .
-# 首次运行会自动生成 config/config.yaml 并退出
-./cfguard
-# 修改配置后再次运行
-./cfguard
+git clone https://github.com/sck03/cloudflare-dns-failover.git
+cd cloudflare-dns-failover
+mkdir -p config instance
+cp config.example.yaml config/config.yaml
 ```
 
-> **注意**: 由于静态资源已嵌入到二进制文件中，您无需再复制 `static` 目录。
+编辑 `config/config.yaml`：设置至少 32 字符的独立 `server.jwt_secret`（同时也是 Web 登录密码），填写 Cloudflare API Token。可用 `openssl rand -hex 32` 生成密码。Token 需要目标 Zone 的 **Zone Read** 和 **DNS Edit** 权限。
 
-## ⚙️ 配置说明
+```bash
+docker compose pull
+docker compose up -d
+```
 
-`config.yaml` 用于定义应用的静态核心配置。我们采用**配置与数据分离**的最佳实践：
+访问 `http://服务器地址:8099`。通过反向代理提供 HTTPS 后再开放公网管理入口。配置目录和 `instance` 目录必须可写。默认持久化 `instance/cfguard.db`，支持 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。
 
-*   **`config.yaml`**: 存储**静态配置**，如服务端口、数据库路径、账号凭证和通知渠道。这些信息在应用启动时加载，通常不应在运行时频繁变动。
-*   **`instance/cfguard.db`**: 这是一个 SQLite 数据库文件，用于存储**动态数据**，即你在 Web UI 中创建和管理的所有**监控策略**。
+已有实例请先阅读[升级说明](docs/UPGRADE.md)，尤其是目录挂载、HTTPS 证书校验和首次初始化行为的变化。
 
-### 配置文件结构详解
+## 配置
+
+完整示例见 [config.example.yaml](config.example.yaml)。默认只从 YAML 初始化监控一次；随后由 Web UI 和 SQLite 管理，重启不会覆盖界面修改或重新创建已删除的监控。
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `server.port` | `8099` | Web 服务端口 |
+| `server.max_concurrent_checks` | `8` | 同时执行的监控操作上限，每项最多并行探测两个源站 |
+| `database.history_retention_days` | `30` | 切换记录保留天数，启动和每小时清理过期记录 |
+| `type` | `https` | `http`、`https`、`ping`；已有策略不会自动改变类型 |
+| `target` | 必填（HTTP） | 完整健康检查 URL；省略协议时使用 `type`，显式 URL 的协议优先 |
+| `original_ip` / `backup_ip` | 必填 | 不同的真实源站；A 填 IPv4，AAAA 填 IPv6，CNAME 填独立源站域名 |
+| `interval` | `60` | 调度间隔，秒；长任务不会堆积为重复检查 |
+| `timeout` | `5` | 每个源站一次检测的总时间预算，秒，最大 120 |
+| `retries` | `3` | 当前地址连续失败阈值 |
+| `success_threshold` | `2` | 优先地址连续成功恢复阈值 |
+| `ping_count` | `3` | 一次 Ping 检测最多尝试次数，共享 `timeout` 预算 |
+| `expected_status` | `0` | HTTP 接受任意 2xx；也可指定 200、204 等 2xx 状态 |
+| `insecure_skip_verify` | `false` | 显式允许自签名 / Cloudflare Origin CA 源站证书 |
+| `dns_ttl` | `0` | 0 保留；1 自动；60–86400 为秒数。界面新建默认 60；代理记录固定自动 TTL |
+| `original_ip_cdn_enabled` / `backup_ip_cdn_enabled` | `false` | 切换至对应地址时使用的 Cloudflare 代理状态 |
+| `cf_record_id` | 可省略 | 同名同类型多条记录时必须明确填写；单条记录可自动发现或修复失效 ID |
+
+HTTP 检测最多跟随五次同主机重定向，并判断最终响应；跨主机重定向会报错，请直接配置健康检查路径。响应读取限制为 32 KiB。源站防火墙应允许监控程序访问。
+
+同一个 DNS 名称 / 类型只允许一个策略管理，避免策略互相覆盖。有 A 和 AAAA 两种记录时，需要分别配置对应策略。
+
+### YAML 首次初始化示例
 
 ```yaml
-# 服务器相关配置
-server:
-  # 服务监听端口 (默认 8099)
-  port: 8099
-  # 是否开启 Debug 模式 (生产环境建议 false)
-  debug: false
-  # 是否开启登录认证 (强烈建议 true)
-  auth_enabled: true
-  # JWT 密钥，这同时也是你登录 Web 管理界面的【密码】！生产环境务必修改。
-  jwt_secret: "change-this-secret-key-in-production"
-
-# 数据库文件路径配置
-database:
-  path: "instance/cfguard.db"
-
-# Cloudflare 账号凭证列表 (支持多账号)
-accounts:
-  - name: "default"  # 账号名称，用于在监控策略中引用
-    # 推荐使用 API Token (权限更细，更安全)
-    # 获取地址: https://dash.cloudflare.com/profile/api-tokens
-    api_token: "YOUR_CLOUDFLARE_API_TOKEN"
-    # 或者使用 Email + Global API Key (旧版方式，不推荐)
-    email: ""
-    api_key: ""
-
-# 通知渠道配置
-notification:
-  dingtalk:
-    enabled: false
-    access_token: ""
-    secret: "" # 可选的加签密钥
-  telegram:
-    enabled: false
-    bot_token: ""
-    chat_id: ""
-  email:
-    enabled: false
-    host: "smtp.example.com"
-    port: 465 # 465 (SSL/TLS) 或 587 (STARTTLS)
-    username: "your_email@example.com"
-    password: "your_email_password"
-    to: "admin@example.com"
-
-# 【重要】监控策略初始化列表
-# 注意：此列表仅用于在程序首次启动时，将配置“同步”到数据库。
-# 在那之后，所有的监控项管理（增、删、改）都应在 Web UI 中进行。
-# 为避免重启后 UI 上的删除操作被覆盖（“复活”问题），强烈建议将此列表保持为空。
-# 如果你确实需要通过配置文件预设监控，可以取消下面行的注释并添加你的配置。
-monitors: []
-#  - name: "Web Server Monitor"
-#    account: "default"
-#    domain: "sub.example.com"
-#    zone_id: "your_zone_id_here"
-#    type: "http"
-#    target: "https://sub.example.com"
-#    original_ip: "1.2.3.4"
-#    backup_ip: "5.6.7.8"
-#    interval: 60
-#    # 【高级功能】计划任务轮换 (仅限配置文件)
-#    # UI 界面目前仅支持简化的定时切换，不支持灵活的 Cron 表达式。
-#    schedules:
-#      - cron: "0 8 * * *"      # 每天 08:00 切换到 IP 1.2.3.4
-#        target_ip: "1.2.3.4"
-#      - cron: "0 20 * * *"     # 每天 20:00 切换到 IP 5.6.7.8
-#        target_ip: "5.6.7.8"
-
+monitors:
+  - name: 网站
+    account: default
+    domain: www.example.com
+    zone_id: your_zone_id
+    dns_type: A
+    type: https
+    target: https://www.example.com/health
+    original_ip: 192.0.2.10
+    backup_ip: 192.0.2.20
+    interval: 15
+    timeout: 5
+    retries: 3
+    success_threshold: 2
+    expected_status: 200
+    dns_ttl: 60
+    schedules:
+      - cron: "0 8 * * *"
+        target_ip: 192.0.2.10
+      - cron: "0 20 * * *"
+        target_ip: 192.0.2.20
 ```
 
-## 🔒 安全性
+示例地址是文档保留地址，部署时必须替换。CNAME 源站域名应直接解析到源站，不能是当前管理的业务域名或另一层 CDN。
 
-*   **JWT 认证**: Web 管理界面受保护。使用 `config.yaml` 中的 `jwt_secret` 作为登录密码。
-*   **内网模式**: 如果在受信任的内网运行，可设置 `auth_enabled: false` 关闭登录验证。
+Web 界面的简化计划使用 `0 */N * * *`（当地时区整点，每天重新计数）；任意五字段 Cron 可通过 YAML 首次初始化或 API `schedules` 数组配置。目标必须是该策略的主地址或备用地址。
 
-## 🔄 自动化构建
+## 编译、测试与发布
 
-本项目使用 GitHub Actions 自动构建并发布多架构 Docker 镜像。
-只需创建一个新的 Release (例如 `v1.0.0`)，工作流就会自动推送到 GHCR。
+GitHub 上的 `Build and publish` 工作流在 `main` 推送、版本标签或手动触发时执行：
 
-## 🤝 贡献
+- 格式、`go vet`、竞态检测、回归测试、依赖漏洞扫描、前端测试和工作流校验。
+- 测试通过后交叉编译 Linux 三种架构和 Windows amd64；可在 Actions 的 `cfguard-binaries` 附件下载程序、示例配置和 SHA256 校验文件。
+- 验证容器启动、自定义端口健康检查、Ping 和正常停机，再推送多架构 GHCR 镜像，提供 `latest`、提交 SHA 和版本标签。测试失败时不进入发布步骤。
 
-欢迎提交 Issue 和 Pull Request！
+本地使用 Go 1.27.2：
 
----
-*Built with ❤️ using Go.*
+```bash
+go test ./...
+go vet ./...
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o cfguard .
+./cfguard -version
+./cfguard
+```
+
+无配置时会生成 `config/config.yaml` 并退出。检查已启动服务可执行 `./cfguard -healthcheck`，会使用配置中的实际端口。完整 CI 检查见 [scripts/check.sh](scripts/check.sh)，跨平台构建见 [scripts/build.sh](scripts/build.sh)。
+
+## 架构与审阅
+
+- [架构、状态模型与扩展边界](docs/ARCHITECTURE.md)
+- [完成进度与验证记录](docs/STATUS.md)
+- [部署、故障排查与 API](docs/OPERATIONS.md)
+- [已有实例升级说明](docs/UPGRADE.md)
+
+后端和前端静态资源嵌入一个程序。资源占用取决于策略数量、超时、通知和数据库规模；项目不再使用未经测量的内存、CPU 或零停机保证。

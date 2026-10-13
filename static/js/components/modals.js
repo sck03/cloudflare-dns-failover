@@ -96,29 +96,22 @@ export async function openMonitorModal(monitor) {
             account_name: '',
             zone_id: '',
             cf_domain: '',
-            type: 'ping',
+            type: 'https',
             target: '',
             original_ip: '',
             backup_ip: '',
             retries: 3,
             success_threshold: 2,
             interval: 60,
-            timeout: 2,
+            timeout: 5,
+			dns_ttl: 60,
+			expected_status: 0,
+			insecure_skip_verify: false,
             ping_count: 3,
             original_ip_cdn_enabled: false,
             backup_ip_cdn_enabled: false
         });
     }
-}
-
-export function editMonitor(monitorId) {
-    const monitor = state.monitorsCache.find(m => m.id == monitorId);
-    if (!monitor) {
-        showNotification('未找到该策略', 'error');
-        return;
-    }
-    state.editingMonitorId = monitorId;
-    showMonitorModal(monitor);
 }
 
 async function showMonitorModal(monitor) {
@@ -166,7 +159,10 @@ async function showMonitorModal(monitor) {
     document.getElementById('monitor-retries').value = monitor.retries ?? 3;
     document.getElementById('monitor-success-threshold').value = monitor.success_threshold ?? 2;
     document.getElementById('monitor-interval').value = monitor.interval ?? 60;
-    document.getElementById('monitor-timeout-seconds').value = monitor.timeout ?? 2;
+    document.getElementById('monitor-timeout-seconds').value = monitor.timeout ?? 5;
+    document.getElementById('monitor-dns-ttl').value = monitor.dns_ttl ?? 60;
+    document.getElementById('monitor-expected-status').value = monitor.expected_status ?? 0;
+    document.getElementById('monitor-insecure-tls').checked = !!monitor.insecure_skip_verify;
     document.getElementById('monitor-ping-count').value = monitor.ping_count ?? 3;
     document.getElementById('monitor-original-cdn').checked = !!monitor.original_ip_cdn_enabled;
     document.getElementById('monitor-backup-cdn').checked = !!monitor.backup_ip_cdn_enabled;
@@ -205,7 +201,10 @@ export async function submitMonitorForm() {
         retries: Number(document.getElementById('monitor-retries').value) || 3,
         success_threshold: Number(document.getElementById('monitor-success-threshold').value) || 2,
         interval: Number(document.getElementById('monitor-interval').value) || 60,
-        timeout: Number(document.getElementById('monitor-timeout-seconds').value) || 2,
+        timeout: Number(document.getElementById('monitor-timeout-seconds').value) || 5,
+        dns_ttl: Number(document.getElementById('monitor-dns-ttl').value),
+        expected_status: Number(document.getElementById('monitor-expected-status').value),
+        insecure_skip_verify: document.getElementById('monitor-insecure-tls').checked,
         ping_count: Number(document.getElementById('monitor-ping-count').value) || 3,
         original_ip_cdn_enabled: !!document.getElementById('monitor-original-cdn').checked,
         backup_ip_cdn_enabled: !!document.getElementById('monitor-backup-cdn').checked
@@ -260,24 +259,21 @@ export function openRestoreModal(monitorId) {
 export function hideRestoreModal() {
     const modal = document.getElementById('restore-modal');
     if (modal) modal.classList.add('hidden');
+    state.restoreMonitorId = null;
 }
 
 export async function confirmRestore() {
     if (!state.restoreMonitorId) return;
     const proxied = document.getElementById('restore-proxied').checked;
-    try {
-        await apiRequest(`/api/monitors/${state.restoreMonitorId}/restore`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ proxied })
-        });
-        hideRestoreModal();
-        showNotification('恢复指令已发送', 'success');
-        await fetchMonitors();
-        await loadDashboardData();
-    } finally {
-        state.restoreMonitorId = null;
-    }
+    await apiRequest(`/api/monitors/${state.restoreMonitorId}/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proxied })
+    });
+    hideRestoreModal();
+    showNotification('Cloudflare 已确认恢复到主地址', 'success');
+    await fetchMonitors();
+    await loadDashboardData();
 }
 
 // --- Schedule Modal --- //
@@ -315,8 +311,12 @@ export async function saveScheduleSwitch() {
 
     let payload = { enabled: false };
     if (enabled) {
-        if (!hours || Number(hours) < 1) {
-            throw new Error('请填写有效的小时数');
+        if (!Number.isInteger(Number(hours)) || Number(hours) < 1 || Number(hours) > 23) {
+            throw new Error('请填写 1 到 23 的整数小时数');
+        }
+        const monitor = state.monitorsCache.find(m => m.id == state.scheduleMonitorId);
+        if (!monitor || ![monitor.original_ip, monitor.backup_ip].includes(ip)) {
+            throw new Error('切换地址必须填写该策略的主地址或备用地址');
         }
         payload = {
             enabled: true,
@@ -325,18 +325,14 @@ export async function saveScheduleSwitch() {
         };
     }
 
-    try {
-        await apiRequest(`/api/monitors/${state.scheduleMonitorId}/schedule`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        hideScheduleSwitchModal();
-        showNotification('定时切换保存成功', 'success');
-        await fetchMonitors();
-    } finally {
-        state.scheduleMonitorId = null;
-    }
+    await apiRequest(`/api/monitors/${state.scheduleMonitorId}/schedule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    hideScheduleSwitchModal();
+    showNotification('定时切换保存成功', 'success');
+    await fetchMonitors();
 }
 
 // --- Account Modal --- //
@@ -377,7 +373,7 @@ export async function submitAccountForm() {
     };
 
     if (state.editingAccountId) {
-        await apiRequest(`/api/cloudflare-accounts/${state.editingAccountId}`, {
+        await apiRequest(`/api/cloudflare-accounts/${encodeURIComponent(state.editingAccountId)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)

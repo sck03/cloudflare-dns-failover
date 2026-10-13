@@ -2,349 +2,407 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"io"
 	"log"
-	"net"
-	"net/http"
-	"os/exec"
-	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"cfguard/internal/failover"
+	"cfguard/internal/health"
 	"github.com/robfig/cron/v3"
+	"gorm.io/gorm"
 )
 
-// --- Engine ---
-
-var (
-	Scheduler      *cron.Cron
-	schedulerMutex sync.Mutex
-
-	// HTTP Client Cache to reuse connections (Keep-Alive)
-	httpClientMutex sync.Mutex
-	httpClients     = make(map[string]*http.Client)
-)
-
-func getHTTPClient(forceIP string, timeout int) *http.Client {
-	httpClientMutex.Lock()
-	defer httpClientMutex.Unlock()
-
-	// Key based on configuration.
-	// Note: If monitors have same forceIP but different timeouts, they need different clients
-	// because http.Client.Timeout is struct field.
-	key := fmt.Sprintf("%s-%d", forceIP, timeout)
-
-	if client, ok := httpClients[key]; ok {
-		return client
-	}
-
-	tr := &http.Transport{
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true}, // Monitor might check self-signed
-		DisableKeepAlives:   false,                                 // Enable Keep-Alive
-		MaxIdleConnsPerHost: 10,                                    // Allow concurrent checks to same host
-		IdleConnTimeout:     90 * time.Second,
-	}
-
-	// If forceIP is provided, override DNS resolution
-	if forceIP != "" {
-		dialer := &net.Dialer{
-			Timeout:   5 * time.Second, // TCP Connect timeout
-			KeepAlive: 30 * time.Second,
-		}
-		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			// addr is "hostname:port".
-			_, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				// Fallback if parsing fails
-				return dialer.DialContext(ctx, network, addr)
-			}
-			// Use forceIP but keep the port
-			return dialer.DialContext(ctx, network, net.JoinHostPort(forceIP, port))
-		}
-	}
-
-	client := &http.Client{
-		Timeout:   time.Duration(timeout) * time.Second,
-		Transport: tr,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	httpClients[key] = client
-	return client
+type HealthChecker interface {
+	Check(context.Context, health.Spec, string) error
 }
 
-func StartScheduler() {
-	ReloadSchedules()
+type DNSProvider interface {
+	Read(context.Context, *Monitor) (*CloudflareRecord, error)
+	Switch(context.Context, *Monitor, string) (string, error)
 }
 
-func StopScheduler() {
-	schedulerMutex.Lock()
-	defer schedulerMutex.Unlock()
+type DNSConfigurator interface {
+	ConfigureTTL(context.Context, *Monitor, *CloudflareRecord) error
+}
 
-	if Scheduler != nil {
-		ctx := Scheduler.Stop()
-		<-ctx.Done() // Wait for running jobs to complete
-		log.Println("Scheduler stopped and all jobs completed.")
+type cloudflareDNS struct{}
+
+func (cloudflareDNS) Read(ctx context.Context, m *Monitor) (*CloudflareRecord, error) {
+	return readDNSRecord(ctx, m)
+}
+func (cloudflareDNS) Switch(ctx context.Context, m *Monitor, target string) (string, error) {
+	return updateDNS(ctx, m, target)
+}
+
+type Engine struct {
+	db      *gorm.DB
+	checker HealthChecker
+	dns     DNSProvider
+	notify  func(string)
+	ctx     context.Context
+	cancel  context.CancelFunc
+	cron    *cron.Cron
+	slots   chan struct{}
+	locks   [64]chan struct{}
+	mu      sync.Mutex
+	entries map[uint][]cron.EntryID
+	plans   map[uint]string
+	synced  map[uint]time.Time
+	started bool
+	stopped bool
+	initial sync.WaitGroup
+}
+
+var engine *Engine
+
+func NewEngine(db *gorm.DB, checker HealthChecker, dns DNSProvider, concurrency int, notify func(string)) *Engine {
+	ctx, cancel := context.WithCancel(context.Background())
+	e := &Engine{
+		db: db, checker: checker, dns: dns, notify: notify, ctx: ctx, cancel: cancel,
+		slots: make(chan struct{}, max(concurrency, 1)), entries: make(map[uint][]cron.EntryID),
+		plans:  make(map[uint]string),
+		synced: make(map[uint]time.Time),
+		cron:   cron.New(cron.WithChain(cron.Recover(cron.DefaultLogger), cron.SkipIfStillRunning(cron.DefaultLogger))),
+	}
+	for i := range e.locks {
+		e.locks[i] = make(chan struct{}, 1)
+	}
+	return e
+}
+
+// Lock serializes checks, scheduled/manual switches and configuration mutations.
+// A fixed set of stripes bounds lock memory even when monitors are repeatedly deleted.
+func (e *Engine) Lock(ctx context.Context, id uint) (func(), error) {
+	lock := e.locks[id%uint(len(e.locks))]
+	select {
+	case lock <- struct{}{}:
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-e.ctx.Done():
+		return nil, e.ctx.Err()
 	}
 }
 
-func ReloadSchedules() {
-	schedulerMutex.Lock()
-	defer schedulerMutex.Unlock()
+func (e *Engine) Invalidate(id uint) {
+	e.mu.Lock()
+	delete(e.synced, id)
+	e.mu.Unlock()
+}
 
-	if Scheduler != nil {
-		Scheduler.Stop()
-	}
-	Scheduler = cron.New(cron.WithChain(
-		cron.SkipIfStillRunning(cron.DefaultLogger),
-	))
-	Scheduler.Start()
-
+func (e *Engine) Reload() error {
 	var monitors []Monitor
-	DB.Preload("Schedules").Find(&monitors)
-
-	// 1. Monitoring Jobs
+	if err := e.db.Preload("Schedules").Find(&monitors).Error; err != nil {
+		return err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stopped {
+		return context.Canceled
+	}
+	present := make(map[uint]bool, len(monitors))
 	for _, m := range monitors {
-		mCopy := m
-		mCopy.ApplyDefaults()
-		interval := mCopy.Interval
-
-		if _, err := Scheduler.AddFunc(fmt.Sprintf("@every %ds", interval), func() {
-			CheckMonitor(&mCopy)
-		}); err != nil {
-			log.Printf("Failed to schedule monitor %d: %v", mCopy.ID, err)
+		m.ApplyDefaults()
+		id := m.ID
+		present[id] = true
+		plan := fmt.Sprintf("%d:%v", m.Interval, m.Schedules)
+		if e.plans[id] == plan {
+			continue
 		}
-
-		// 2. Schedule Jobs
-		for _, s := range mCopy.Schedules {
-			monitorID := mCopy.ID
-			targetIP := s.TargetIP
-			cronExpr := s.Cron
-			if _, err := Scheduler.AddFunc(cronExpr, func() {
-				ScheduledSwitch(monitorID, targetIP)
-			}); err != nil {
-				log.Printf("Failed to schedule switch for monitor %d: %v", monitorID, err)
+		_, existed := e.entries[id]
+		for _, entry := range e.entries[id] {
+			e.cron.Remove(entry)
+		}
+		e.plans[id] = plan
+		entry, err := e.cron.AddFunc(fmt.Sprintf("@every %ds", m.Interval), func() { e.Check(id) })
+		if err != nil {
+			return err
+		}
+		e.entries[id] = []cron.EntryID{entry}
+		for _, schedule := range m.Schedules {
+			target := schedule.TargetIP
+			scheduleID := schedule.ID
+			entry, err := e.cron.AddFunc(schedule.Cron, func() {
+				if _, err := e.switchMonitor(e.ctx, id, target, "scheduled", nil, scheduleID); err != nil && e.ctx.Err() == nil {
+					log.Printf("Scheduled switch for monitor %d: %v", id, err)
+				}
+			})
+			if err != nil {
+				log.Printf("Invalid existing schedule for monitor %d: %v", id, err)
+				continue
 			}
+			e.entries[id] = append(e.entries[id], entry)
+		}
+		if !existed {
+			e.initial.Add(1)
+			go func() {
+				defer e.initial.Done()
+				e.Check(id)
+			}()
 		}
 	}
-
-	log.Printf("Scheduler reloaded. Monitoring %d targets.", len(monitors))
+	for id, entries := range e.entries {
+		if !present[id] {
+			for _, entry := range entries {
+				e.cron.Remove(entry)
+			}
+			delete(e.entries, id)
+			delete(e.plans, id)
+			delete(e.synced, id)
+		}
+	}
+	if !e.started {
+		if _, err := e.cron.AddFunc("@hourly", pruneHistory); err != nil {
+			return err
+		}
+		e.cron.Start()
+		e.started = true
+	}
+	return nil
 }
 
-func ScheduledSwitch(monitorID uint, targetIP string) {
-	var m Monitor
-	if err := DB.First(&m, monitorID).Error; err != nil {
-		log.Println("ScheduledSwitch: Monitor not found", monitorID)
-		return
-	}
+func (e *Engine) Stop() {
+	e.mu.Lock()
+	e.stopped = true
+	e.cancel()
+	done := e.cron.Stop()
+	e.mu.Unlock()
+	<-done.Done()
+	e.initial.Wait()
+}
 
-	// Avoid switching if failover is active (Status == Down)
-	if m.Status == "Down" {
-		log.Printf("Skipping scheduled switch for %s because it is Down", m.Name)
-		return
-	}
-
-	log.Printf("Executing scheduled switch for %s to %s", m.Name, targetIP)
-
-	// Update DNS
-	if UpdateCloudflareDNS(&m, targetIP) {
-		m.CurrentIP = targetIP
-		m.FailCount = 0
-		m.SuccCount = 0
-		DB.Model(&m).Select("CurrentIP", "FailCount", "SuccCount").Updates(&m)
-		SendNotification(fmt.Sprintf("🕒 计划任务: %s 已切换至 IP %s", m.Name, targetIP))
+func (e *Engine) takeSlot(ctx context.Context) (func(), error) {
+	select {
+	case e.slots <- struct{}{}:
+		return func() { <-e.slots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-e.ctx.Done():
+		return nil, e.ctx.Err()
 	}
 }
 
-func CheckMonitor(m *Monitor) {
-	// Re-fetch monitor from DB to get latest state (avoid stale state in closure)
-	var currentMonitor Monitor
-	if err := DB.First(&currentMonitor, m.ID).Error; err != nil {
-		return // Monitor might be deleted
-	}
-	*m = currentMonitor
-	m.ApplyDefaults() // Ensure defaults are applied even if DB has zero values
-
-	// We ALWAYS want to check the OriginalIP (Primary Service) availability
-	// This prevents DNS caching issues and ensures we are monitoring the actual backend.
-	// Even if we are currently "Down" (using Backup), we check Primary to see if it recovered.
-	checkTarget := m.OriginalIP
-	if checkTarget == "" {
-		checkTarget = m.Target // Fallback if no specific IP configured
-	}
-
-	isUp := false
-	switch m.Type {
-	case "ping":
-		isUp = CheckPing(checkTarget, m.Timeout, m.PingCount)
-	case "http", "https":
-		// Pass OriginalIP to force connection to Primary
-		isUp = CheckHTTP(m.Target, m.Timeout, m.OriginalIP)
+func (e *Engine) Check(id uint) {
+	lock := e.locks[id%uint(len(e.locks))]
+	select {
+	case lock <- struct{}{}:
+		defer func() { <-lock }()
 	default:
-		isUp = CheckPing(checkTarget, m.Timeout, m.PingCount) // Default
+		return
 	}
-
-	// Logic for Failover
-	if isUp {
-		HandleSuccess(m)
-	} else {
-		HandleFailure(m)
-	}
-
-	// Update DB - Only update dynamic state fields to avoid overwriting configuration changes
-	m.LastCheck = time.Now()
-	// Using Select ensures we only update the fields we care about, protecting Config fields.
-	// Note: We need to use Updates with a struct or map. Since m is a struct and we set fields on it,
-	// Updates(m) works but we must combine it with Select to restrict columns.
-	DB.Model(m).Select("Status", "LastCheck", "FailCount", "SuccCount", "CurrentIP").Updates(m)
-}
-
-func CheckHTTP(target string, timeout int, forceIP string) bool {
-	if !strings.HasPrefix(target, "http") {
-		target = "http://" + target
-	}
-
-	client := getHTTPClient(forceIP, timeout)
-
-	// Use a context for safety, though client.Timeout handles it too.
-	// client.Timeout is "hard" timeout.
-	req, err := http.NewRequest("GET", target, nil)
+	release, err := e.takeSlot(e.ctx)
 	if err != nil {
-		log.Printf("Failed to create HTTP request for %s: %v", target, err)
-		return false
+		return
 	}
-	// Add a user agent
-	req.Header.Set("User-Agent", "CFGuard-Monitor/1.0")
-
-	resp, err := client.Do(req)
+	defer release()
+	var m Monitor
+	if err := e.db.First(&m, id).Error; err != nil {
+		return
+	}
+	oldStatus, oldError := m.Status, m.LastError
+	err = m.Validate()
+	if err == nil {
+		err = checkDNSConflict(e.db, &m)
+	}
 	if err != nil {
-		if AppConfig.Server.Debug {
-			log.Printf("HTTP Check failed for %s: %v", target, err)
-		}
-		return false
+		m.LastError, m.Status = err.Error(), "Error"
+		m.FailCount, m.SuccCount = 0, 0
+		e.persist(&m, oldStatus, oldError)
+		return
 	}
-	defer resp.Body.Close()
-	// Read a bit of body to ensure connection can be reused (drain body)
-	io.Copy(io.Discard, resp.Body)
-
-	success := resp.StatusCode >= 200 && resp.StatusCode < 400
-	if !success && AppConfig.Server.Debug {
-		log.Printf("HTTP Check status code error for %s: %d", target, resp.StatusCode)
+	results := make(chan error, 1)
+	go func() { results <- e.checker.Check(e.ctx, m.healthSpec(), m.BackupIP) }()
+	primaryErr := e.checker.Check(e.ctx, m.healthSpec(), m.OriginalIP)
+	backupErr := <-results
+	if e.ctx.Err() != nil {
+		return
 	}
-	return success
-}
+	primaryUp, backupUp := primaryErr == nil, backupErr == nil
+	m.PrimaryHealthy, m.BackupHealthy = &primaryUp, &backupUp
+	m.PrimaryError, m.BackupError = errorText(primaryErr), errorText(backupErr)
+	m.LastCheck, m.LastError = time.Now(), ""
 
-func CheckPing(host string, timeout int, count int) bool {
-	// Simple Ping implementation using OS command
-	// In production, might want to use a library or raw socket, but permissions can be tricky in docker.
-	// OS command is safer for unprivileged containers if ping is installed.
-
-	// Use context with timeout slightly larger than ping timeout to kill hung processes
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout*count+2)*time.Second)
-	defer cancel()
-
-	// Try 'count' times, if 1 success then OK. This avoids flakiness.
-	success := false
-	for i := 0; i < count; i++ {
-		var cmd *exec.Cmd
-		timeoutStr := strconv.Itoa(timeout)
-
-		if runtime.GOOS == "windows" {
-			cmd = exec.CommandContext(ctx, "ping", "-n", "1", "-w", strconv.Itoa(timeout*1000), host)
+	e.mu.Lock()
+	lastSync := e.synced[id]
+	e.mu.Unlock()
+	if m.CurrentIP == "" || time.Since(lastSync) >= 5*time.Minute {
+		ctx, cancel := context.WithTimeout(e.ctx, 20*time.Second)
+		record, err := e.dns.Read(ctx, &m)
+		if err != nil {
+			m.LastError = "DNS reconciliation: " + err.Error()
 		} else {
-			// Check if IPv6
-			cmdName := "ping"
-			// Simple heuristic: if it contains a colon, treat as IPv6.
-			// Note: If host is a domain, this won't trigger, which is fine as 'ping' usually handles domains.
-			// But for explicit IPv6 literals, we might need ping6 on some older systems.
-			// On Alpine with iputils, ping handles both.
-			if strings.Contains(host, ":") {
-				// Try ping6 if available, or rely on ping auto-detect
-				// For compatibility, let's stick to 'ping' as iputils usually handles it.
-				// However, explicitly using -6 might be safer if we want to force it?
-				// Let's just use "ping" as it's standard now.
-			}
-			cmd = exec.CommandContext(ctx, cmdName, "-c", "1", "-W", timeoutStr, host)
-		}
-
-		// Hide output to keep logs clean
-		cmd.Stdout = io.Discard
-		cmd.Stderr = io.Discard
-
-		err := cmd.Run()
-		if err == nil {
-			success = true
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	return success
-}
-
-func HandleSuccess(m *Monitor) {
-	if m.Status == "Down" {
-		m.SuccCount++
-
-		threshold := m.SuccessThreshold
-		if threshold == 0 {
-			threshold = m.Retries // Fallback to failure threshold
-			if threshold == 0 {
-				threshold = 3 // Default
-			}
-		}
-
-		if m.SuccCount >= threshold {
-			// Restore
-			log.Printf("Monitor %s restored!", m.Name)
-
-			// Try to switch DNS first
-			if UpdateCloudflareDNS(m, m.OriginalIP) {
-				RecordSwitchEvent(m, m.CurrentIP, m.OriginalIP, "auto", false)
-				m.Status = "Normal"
-				m.SuccCount = 0
+			switch {
+			case sameAddress(record.Content, m.OriginalIP):
 				m.CurrentIP = m.OriginalIP
-
-				// Send Notification
-				SendNotification(fmt.Sprintf("✅ 服务恢复: %s 已切回主 IP %s", m.Name, m.OriginalIP))
-			} else {
-				log.Printf("Monitor %s restored but failed to switch DNS to %s", m.Name, m.OriginalIP)
-				// Reset SuccCount so we don't loop tightly, but keep Status=Down
-				// Or maybe keep SuccCount high to retry immediately?
-				// Let's keep it high.
+			case sameAddress(record.Content, m.BackupIP):
+				m.CurrentIP = m.BackupIP
+			default:
+				m.CurrentIP = record.Content
+				m.LastError = "DNS address is outside the configured primary/backup pair"
+			}
+			if m.LastError == "" {
+				activeUp := m.CurrentIP == m.OriginalIP && primaryUp || m.CurrentIP == m.BackupIP && backupUp
+				if configurable, ok := e.dns.(DNSConfigurator); ok && activeUp {
+					if err := configurable.ConfigureTTL(ctx, &m, record); err != nil {
+						m.LastError = "DNS TTL configuration: " + err.Error()
+					}
+				}
+			}
+			if m.LastError == "" {
+				e.mu.Lock()
+				e.synced[id] = time.Now()
+				e.mu.Unlock()
 			}
 		}
-	} else {
-		m.FailCount = 0
+		cancel()
+	}
+	if m.LastError == "" {
+		state, target := failover.Decide(failover.Policy{
+			Primary: m.OriginalIP, Backup: m.BackupIP,
+			FailureThreshold: m.Retries, RecoveryThreshold: m.SuccessThreshold,
+		}, failover.State{
+			Current: m.CurrentIP, Preferred: m.PreferredIP, Failures: m.FailCount, Successes: m.SuccCount,
+		}, primaryUp, backupUp)
+		m.FailCount, m.SuccCount, m.PreferredIP = state.Failures, state.Successes, state.Preferred
+		if target != "" {
+			if err := e.applySwitch(e.ctx, &m, target, "auto"); err == nil {
+				return
+			} else {
+				m.LastError = err.Error()
+			}
+		}
+	}
+	m.Status = monitorStatus(&m)
+	e.persist(&m, oldStatus, oldError)
+}
+
+func (e *Engine) persist(m *Monitor, oldStatus, oldError string) {
+	if err := saveRuntime(e.db, m); err != nil {
+		e.Invalidate(m.ID)
+		log.Printf("Save monitor %d state: %v", m.ID, err)
+		return
+	}
+	if (m.Status == "Down" || m.Status == "Error") && (m.Status != oldStatus || m.LastError != oldError) {
+		e.notify(fmt.Sprintf("监控 %s: %s %s", m.Name, m.Status, m.LastError))
 	}
 }
 
-func HandleFailure(m *Monitor) {
-	if m.Status == "Normal" {
-		m.FailCount++
-		if m.FailCount >= m.Retries {
-			// Failover
-			log.Printf("Monitor %s failed!", m.Name)
+func (e *Engine) Switch(ctx context.Context, id uint, target, kind string, proxied *bool) (*Monitor, error) {
+	return e.switchMonitor(ctx, id, target, kind, proxied, 0)
+}
 
-			// Try to switch DNS first
-			if UpdateCloudflareDNS(m, m.BackupIP) {
-				RecordSwitchEvent(m, m.CurrentIP, m.BackupIP, "auto", true)
-				m.Status = "Down"
-				m.FailCount = 0
-				m.CurrentIP = m.BackupIP
-
-				// Send Notification
-				SendNotification(fmt.Sprintf("🚨 服务报警: %s 故障，已切换至备用 IP %s", m.Name, m.BackupIP))
-			} else {
-				log.Printf("Monitor %s failed but failed to switch DNS to %s", m.Name, m.BackupIP)
-				// Keep status as Normal so we retry next time
-			}
-		}
-	} else {
-		m.SuccCount = 0
+func (e *Engine) switchMonitor(ctx context.Context, id uint, target, kind string, proxied *bool, scheduleID uint) (*Monitor, error) {
+	unlock, err := e.Lock(ctx, id)
+	if err != nil {
+		return nil, err
 	}
+	defer unlock()
+	release, err := e.takeSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	var m Monitor
+	if err := e.db.First(&m, id).Error; err != nil {
+		return nil, err
+	}
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
+	if err := checkDNSConflict(e.db, &m); err != nil {
+		return nil, err
+	}
+	if scheduleID != 0 {
+		var schedule Schedule
+		if err := e.db.Where("id = ? AND monitor_id = ? AND target_ip = ?", scheduleID, id, target).First(&schedule).Error; err != nil {
+			return nil, fmt.Errorf("schedule was removed or changed: %w", err)
+		}
+	}
+	if kind == "manual" {
+		target = m.OriginalIP
+		if proxied != nil {
+			m.OriginalIPCDNEnabled = *proxied
+		}
+	}
+	if target != m.OriginalIP && target != m.BackupIP {
+		return nil, fmt.Errorf("switch target must equal primary or backup")
+	}
+	if err := e.checker.Check(ctx, m.healthSpec(), target); err != nil {
+		return nil, fmt.Errorf("target %s is unhealthy: %w", target, err)
+	}
+	up := true
+	if target == m.OriginalIP {
+		m.PrimaryHealthy, m.PrimaryError = &up, ""
+	} else {
+		m.BackupHealthy, m.BackupError = &up, ""
+	}
+	// A successful scheduled/manual switch becomes the preferred backend;
+	// automatic checks can fail over and later recover to that preference.
+	m.PreferredIP = target
+	if err := e.applySwitch(ctx, &m, target, kind); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func (e *Engine) applySwitch(ctx context.Context, m *Monitor, target, kind string) error {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	from, err := e.dns.Switch(ctx, m, target)
+	if err != nil {
+		e.Invalidate(m.ID)
+		return fmt.Errorf("DNS switch failed: %w", err)
+	}
+	next := *m
+	next.CurrentIP, next.LastError = target, ""
+	next.FailCount, next.SuccCount = 0, 0
+	if !sameAddress(from, target) {
+		next.LastSwitch = time.Now()
+	}
+	next.Status = monitorStatus(&next)
+	if err := saveSwitch(e.db, &next, from, kind); err != nil {
+		e.Invalidate(m.ID)
+		return fmt.Errorf("DNS changed but local state could not be saved; reconciliation required: %w", err)
+	}
+	*m = next
+	e.mu.Lock()
+	e.synced[m.ID] = time.Now()
+	e.mu.Unlock()
+	if !sameAddress(from, target) {
+		e.notify(fmt.Sprintf("%s: %s → %s (%s)", m.Name, from, target, kind))
+	}
+	return nil
+}
+
+func monitorStatus(m *Monitor) string {
+	if m.LastError != "" {
+		return "Error"
+	}
+	if m.PrimaryHealthy == nil || m.BackupHealthy == nil {
+		return "Unknown"
+	}
+	primary, backup := *m.PrimaryHealthy, *m.BackupHealthy
+	if !primary && !backup {
+		return "Down"
+	}
+	activeUp := m.CurrentIP == m.OriginalIP && primary || m.CurrentIP == m.BackupIP && backup
+	if !activeUp {
+		return "Degraded"
+	}
+	if m.CurrentIP != m.PreferredIP {
+		return "Failover"
+	}
+	if !primary || !backup {
+		return "Degraded"
+	}
+	return "Normal"
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return strings.TrimSpace(err.Error())
 }

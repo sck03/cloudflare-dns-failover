@@ -2,11 +2,15 @@ package main
 
 import (
 	"embed"
-	"log"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 //go:embed config.example.yaml
@@ -23,133 +27,186 @@ type AccountConfig struct {
 
 type Config struct {
 	Server struct {
-		Port        int    `yaml:"port"`
-		Debug       bool   `yaml:"debug"`
-		AuthEnabled bool   `yaml:"auth_enabled"`
-		JwtSecret   string `yaml:"jwt_secret"`
+		Port                int    `yaml:"port"`
+		Debug               bool   `yaml:"debug"`
+		AuthEnabled         bool   `yaml:"auth_enabled"`
+		JwtSecret           string `yaml:"jwt_secret"`
+		MaxConcurrentChecks int    `yaml:"max_concurrent_checks"`
 	} `yaml:"server"`
 	Database struct {
-		Path string `yaml:"path"`
+		Path                 string `yaml:"path"`
+		HistoryRetentionDays int    `yaml:"history_retention_days"`
 	} `yaml:"database"`
-	ActiveAccount string          `yaml:"active_account"`
-	Accounts      []AccountConfig `yaml:"accounts"`
-	Notification  struct {
-		DingTalk struct {
-			Enabled     bool   `yaml:"enabled"`
-			AccessToken string `yaml:"access_token"`
-			Secret      string `yaml:"secret"`
-		} `yaml:"dingtalk"`
-		Telegram struct {
-			Enabled  bool   `yaml:"enabled"`
-			BotToken string `yaml:"bot_token"`
-			ChatID   string `yaml:"chat_id"`
-		} `yaml:"telegram"`
-		Email struct {
-			Enabled  bool   `yaml:"enabled"`
-			Host     string `yaml:"host"`
-			Port     int    `yaml:"port"`
-			Username string `yaml:"username"`
-			Password string `yaml:"password"`
-			To       string `yaml:"to"`
-		} `yaml:"email"`
-	} `yaml:"notification"`
+	ActiveAccount string             `yaml:"active_account"`
+	Accounts      []AccountConfig    `yaml:"accounts"`
+	Notification  NotificationConfig `yaml:"notification"`
 
 	// Initial Monitors for seeding
 	Monitors []MonitorConfig `yaml:"monitors"`
 }
 
+type NotificationConfig struct {
+	DingTalk struct {
+		Enabled     bool   `yaml:"enabled" json:"enabled"`
+		AccessToken string `yaml:"access_token" json:"access_token"`
+		Secret      string `yaml:"secret" json:"secret"`
+	} `yaml:"dingtalk" json:"dingtalk"`
+	Telegram struct {
+		Enabled  bool   `yaml:"enabled" json:"enabled"`
+		BotToken string `yaml:"bot_token" json:"bot_token"`
+		ChatID   string `yaml:"chat_id" json:"chat_id"`
+	} `yaml:"telegram" json:"telegram"`
+	Email struct {
+		Enabled  bool   `yaml:"enabled" json:"enabled"`
+		Host     string `yaml:"host" json:"host"`
+		Port     int    `yaml:"port" json:"port"`
+		Username string `yaml:"username" json:"username"`
+		Password string `yaml:"password" json:"password"`
+		To       string `yaml:"to" json:"to"`
+	} `yaml:"email" json:"email"`
+}
+
 var AppConfig Config
 var LoadedConfigPath string
+var configMutex sync.RWMutex
+var ErrConfigCreated = errors.New("configuration created at config/config.yaml; set jwt_secret and Cloudflare credentials before starting")
 
-func SaveConfig(path string) error {
-	if path == "" {
-		path = LoadedConfigPath
+func ConfigSnapshot() Config {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return cloneConfig(AppConfig)
+}
+
+func cloneConfig(config Config) Config {
+	config.Accounts = slices.Clone(config.Accounts)
+	config.Monitors = slices.Clone(config.Monitors)
+	for i := range config.Monitors {
+		config.Monitors[i].Schedules = slices.Clone(config.Monitors[i].Schedules)
 	}
+	return config
+}
+
+// UpdateConfig publishes a new snapshot only after the atomic disk write succeeds.
+func UpdateConfig(change func(*Config) error) error {
+	configMutex.Lock()
+	defer configMutex.Unlock()
+	next := cloneConfig(AppConfig)
+	if err := change(&next); err != nil {
+		return err
+	}
+	if err := validateConfig(&next); err != nil {
+		return err
+	}
+	if err := saveConfig(LoadedConfigPath, next); err != nil {
+		return err
+	}
+	AppConfig = next
+	return nil
+}
+
+func saveConfig(path string, config Config) error {
 	if path == "" {
 		path = "config/config.yaml"
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	data, err := yaml.Marshal(&AppConfig)
+	data, err := yaml.Marshal(config)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	file, err := os.CreateTemp(filepath.Dir(path), ".config-*.yaml")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if err = file.Chmod(0600); err == nil {
+		_, err = file.Write(data)
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(file.Name(), path); err != nil {
+		return fmt.Errorf("save config atomically (mount the config directory, not a single file): %w", err)
+	}
+	return nil
 }
 
-func LoadConfig() {
-	configPaths := []string{"config/config.yaml", "config.yaml"}
-	var lastErr error
-	var foundConfig bool
-
-	for _, path := range configPaths {
-		if _, err := os.Stat(path); err == nil {
-			f, err := os.Open(path)
-			if err != nil {
-				log.Fatalf("Failed to open config file %s: %v", path, err)
-			}
-			defer f.Close()
-
-			// First, unmarshal into a temporary map to preserve comments
-			var tempMap map[string]interface{}
-			decoder := yaml.NewDecoder(f)
-			if err := decoder.Decode(&tempMap); err != nil {
-				log.Fatalf("Failed to parse YAML from %s: %v", path, err)
-			}
-
-			// Reset file pointer and decode into the struct
-			f.Seek(0, 0)
-			decoder = yaml.NewDecoder(f)
-			if err := decoder.Decode(&AppConfig); err != nil {
-				log.Fatalf("Failed to decode config from %s into struct: %v", path, err)
-			}
-
-			LoadedConfigPath = path
-			log.Println("✅ Loaded config from", path)
-			foundConfig = true
-
-			// Check for default JWT secret
-			if AppConfig.Server.JwtSecret == "please-change-this-secret-key-in-production" || AppConfig.Server.JwtSecret == "change-this-secret-key-in-production" {
-				log.Println("⚠️ WARNING: Your JWT secret is set to the default value.")
-				log.Println("   Please change 'jwt_secret' in your config file for security.")
-			}
-			return
-		} else {
-			lastErr = err
+func LoadConfig() error {
+	for _, path := range []string{"config/config.yaml", "config.yaml"} {
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
 		}
-	}
-
-	// If no config file was found, create a default one
-	if !foundConfig {
-		log.Println("🤔 No config file found, creating a default one...")
-		LoadedConfigPath = "config/config.yaml"
-
-		// Create the directory if it doesn't exist
-		dir := filepath.Dir(LoadedConfigPath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			log.Fatalf("❌ Failed to create config directory: %v", err)
-		}
-
-		// Read the embedded example config
-		exampleBytes, err := exampleConfig.ReadFile("config.example.yaml")
 		if err != nil {
-			log.Fatalf("❌ Failed to read embedded example config: %v", err)
+			return err
 		}
-
-		// Write the example config to the new file
-		err = os.WriteFile(LoadedConfigPath, exampleBytes, 0644)
-		if err != nil {
-			log.Fatalf("❌ Failed to write default config file: %v", err)
+		var config Config
+		if err := yaml.Unmarshal(data, &config); err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
 		}
-
-		log.Println("✅ Default config file created at:", LoadedConfigPath)
-		log.Println("👉 Please edit this file with your Cloudflare details and restart the application.")
-		os.Exit(0) // Exit after creating the config to force user to edit it
+		if err := validateConfig(&config); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		configMutex.Lock()
+		AppConfig, LoadedConfigPath = config, path
+		configMutex.Unlock()
+		return nil
 	}
-
-	if lastErr != nil && !os.IsNotExist(lastErr) {
-		log.Printf("⚠️ An error occurred while searching for config files: %v", lastErr)
+	data, err := exampleConfig.ReadFile("config.example.yaml")
+	if err != nil {
+		return err
 	}
+	if err := os.MkdirAll("config", 0700); err != nil {
+		return err
+	}
+	if err := os.WriteFile("config/config.yaml", data, 0600); err != nil {
+		return err
+	}
+	return ErrConfigCreated
+}
+
+func validateConfig(config *Config) error {
+	if config.Server.Port == 0 {
+		config.Server.Port = 8099
+	}
+	if config.Server.Port < 1 || config.Server.Port > 65535 {
+		return errors.New("server.port must be between 1 and 65535")
+	}
+	if config.Server.MaxConcurrentChecks == 0 {
+		config.Server.MaxConcurrentChecks = 8
+	}
+	if config.Server.MaxConcurrentChecks < 1 || config.Server.MaxConcurrentChecks > 256 {
+		return errors.New("max_concurrent_checks must be between 1 and 256")
+	}
+	if config.Database.HistoryRetentionDays == 0 {
+		config.Database.HistoryRetentionDays = 30
+	}
+	if config.Database.HistoryRetentionDays < 1 || config.Database.HistoryRetentionDays > 3650 {
+		return errors.New("history_retention_days must be between 1 and 3650")
+	}
+	if config.Server.AuthEnabled && (len(config.Server.JwtSecret) < 32 || defaultSecret(config.Server.JwtSecret)) {
+		return errors.New("set server.jwt_secret to a unique password of at least 32 characters")
+	}
+	names := make(map[string]bool)
+	for _, account := range config.Accounts {
+		if account.Name == "" || strings.TrimSpace(account.Name) != account.Name || names[account.Name] {
+			return errors.New("account names must be nonempty and unique")
+		}
+		names[account.Name] = true
+	}
+	if config.ActiveAccount != "" && !names[config.ActiveAccount] {
+		return errors.New("active_account does not exist")
+	}
+	return nil
+}
+
+func defaultSecret(secret string) bool {
+	return secret == "" || secret == "change-this-secret-key-in-production" || secret == "please-change-this-secret-key-in-production"
 }

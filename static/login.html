@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>登录 - DNS故障切换管理系统</title>
-    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="icon" type="image/png" href="/favicon.png">
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -183,7 +183,7 @@
                     // 登录成功，跳转到主页
                     window.location.href = '/';
                 } else {
-                    showError(result.msg || '登录失败');
+                    showError(result.error || result.msg || '登录失败');
                     btn.disabled = false;
                     btnText.textContent = originalText;
                 }

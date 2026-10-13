@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -11,138 +13,155 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// --- Database ---
-
 var DB *gorm.DB
 
-func InitDB() {
+func InitDB() error {
+	path := ConfigSnapshot().Database.Path
+	if path == "" {
+		path = "instance/cfguard.db"
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
 	var err error
-	dbPath := AppConfig.Database.Path
-	if dbPath == "" {
-		dbPath = "instance/cfguard.db"
-	}
-	// Ensure directory exists
-	dir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Fatalf("Failed to create database directory: %v", err)
-	}
-
-	// Silent logger to reduce noise
-	newLogger := logger.New(
-		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
-		logger.Config{
-			SlowThreshold:             time.Second,  // Slow SQL threshold
-			LogLevel:                  logger.Error, // Log level (Silent, Error, Warn, Info)
-			IgnoreRecordNotFoundError: true,         // Ignore ErrRecordNotFound error for logger
-			ParameterizedQueries:      true,         // Don't include params in the SQL log
-			Colorful:                  false,        // Disable color
-		},
-	)
-
-	// Enable WAL mode for better concurrency and set busy timeout
-	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
-
-	DB, err = gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: newLogger,
+	DB, err = gorm.Open(sqlite.Open(path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"), &gorm.Config{
+		Logger: logger.New(log.New(os.Stderr, "", log.LstdFlags), logger.Config{
+			SlowThreshold: time.Second, LogLevel: logger.Error,
+			IgnoreRecordNotFoundError: true, ParameterizedQueries: true,
+		}),
 	})
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		return err
 	}
-
-	// Auto Migrate
-	err = DB.AutoMigrate(&Monitor{}, &Schedule{}, &SwitchEvent{})
+	sqlDB, err := DB.DB()
 	if err != nil {
-		log.Fatalf("Failed to migrate database: %v", err)
+		return err
 	}
+	// SQLite permits one writer. Bound connections instead of growing a pool
+	// whose concurrent writes contend for the same database file.
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	return DB.AutoMigrate(&Monitor{}, &Schedule{}, &SwitchEvent{}, &Setting{})
 }
 
-func SeedMonitors() {
-	if len(AppConfig.Monitors) == 0 {
-		return
-	}
+type Setting struct {
+	Key   string `gorm:"primaryKey"`
+	Value string
+}
 
-	log.Println("Syncing monitors from config/config.yaml...")
-	for _, mc := range AppConfig.Monitors {
-		// Convert Config to Monitor Model (with defaults applied)
-		configMonitor := mc.ToMonitor()
-
-		// Check if monitor exists by name
-		var existing Monitor
-		result := DB.Where("name = ?", mc.Name).First(&existing)
-
-		if result.Error == nil {
-			// Found: Update Configurable Fields ONLY
-			// We respect the Config file as the source of truth for configuration
-			// Copy IDs to preserve them (though Updates() on struct ignores zero values if not carefully handled,
-			// but we want to update even if zero? No, ToMonitor sets defaults.)
-
-			// We only want to update configuration fields, not state fields.
-			// configMonitor contains all config fields + defaults.
-			// It has ID=0, Status="", etc.
-
-			// Use explicit update to ensure we don't overwrite ID or State
-			DB.Model(&existing).Updates(map[string]interface{}{
-				"account_name":            configMonitor.AccountName,
-				"target":                  configMonitor.Target,
-				"type":                    configMonitor.Type,
-				"dns_type":                configMonitor.DNSType,
-				"interval":                configMonitor.Interval,
-				"timeout":                 configMonitor.Timeout,
-				"retries":                 configMonitor.Retries,
-				"ping_count":              configMonitor.PingCount,
-				"success_threshold":       configMonitor.SuccessThreshold,
-				"original_ip":             configMonitor.OriginalIP,
-				"original_ip_cdn_enabled": configMonitor.OriginalIPCDNEnabled,
-				"backup_ip":               configMonitor.BackupIP,
-				"backup_ip_cdn_enabled":   configMonitor.BackupIPCDNEnabled,
-				"cf_zone_id":              configMonitor.CFZoneID,
-				"cf_record_id":            configMonitor.CFRecordID,
-				"cf_domain":               configMonitor.CFDomain,
-			})
-
-			// Sync Schedules
-			DB.Where("monitor_id = ?", existing.ID).Delete(&Schedule{})
-			for _, sc := range mc.Schedules {
-				s := Schedule{
-					MonitorID: existing.ID,
-					Cron:      sc.Cron,
-					TargetIP:  sc.TargetIP,
-				}
-				DB.Create(&s)
-			}
-
-		} else {
-			// Not Found: Create New
-			// Set initial state
-			configMonitor.Status = "Normal"
-			configMonitor.LastCheck = time.Now()
-			configMonitor.CurrentIP = configMonitor.OriginalIP
-
-			DB.Create(&configMonitor)
-
-			for _, sc := range mc.Schedules {
-				s := Schedule{
-					MonitorID: configMonitor.ID,
-					Cron:      sc.Cron,
-					TargetIP:  sc.TargetIP,
-				}
-				DB.Create(&s)
-			}
-			log.Printf("Created new monitor: %s", configMonitor.Name)
+// Seed once, transactionally. Deleting the last monitor must not re-import it on restart.
+func SeedMonitors() error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var initialized Setting
+		err := tx.First(&initialized, "key = ?", "monitors_seeded").Error
+		if err == nil {
+			return nil
 		}
-	}
-	log.Println("Monitor sync complete.")
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&Monitor{}).Count(&count).Error; err != nil {
+			return err
+		}
+		if account := GetActiveAccountConfig(); account != nil {
+			if err := tx.Model(&Monitor{}).Where("account_name = ''").Update("account_name", account.Name).Error; err != nil {
+				return err
+			}
+		}
+		// Existing installations keep all UI changes. YAML is only a bootstrap source.
+		if count == 0 {
+			for _, config := range ConfigSnapshot().Monitors {
+				monitor := config.ToMonitor()
+				for _, schedule := range config.Schedules {
+					monitor.Schedules = append(monitor.Schedules, Schedule{Cron: schedule.Cron, TargetIP: schedule.TargetIP})
+				}
+				if err := prepareMonitor(&monitor); err != nil {
+					return fmt.Errorf("seed monitor %q: %w", monitor.Name, err)
+				}
+				if err := checkDNSConflict(tx, &monitor); err != nil {
+					return err
+				}
+				if err := tx.Create(&monitor).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return tx.Create(&Setting{Key: "monitors_seeded", Value: "1"}).Error
+	})
 }
 
-func RecordSwitchEvent(monitor *Monitor, fromIP, toIP, eventType string, toBackup bool) {
-	event := SwitchEvent{
-		MonitorID: monitor.ID,
-		Name:      monitor.Name,
-		FromIP:    fromIP,
-		ToIP:      toIP,
-		ToBackup:  toBackup,
-		Type:      eventType,
-		Timestamp: time.Now(),
+func prepareMonitor(m *Monitor) error {
+	if err := m.Validate(); err != nil {
+		return err
 	}
-	DB.Create(&event)
+	account := GetAccountConfig(m.AccountName)
+	if account == nil {
+		return errors.New("configured Cloudflare account does not exist")
+	}
+	m.AccountName = account.Name
+	m.PreferredIP = m.OriginalIP
+	m.Status = "Unknown"
+	return nil
+}
+
+func checkDNSConflict(tx *gorm.DB, m *Monitor) error {
+	var count int64
+	query := tx.Model(&Monitor{}).Where("id <> ? AND cf_zone_id = ?", m.ID, m.CFZoneID)
+	if m.CFRecordID != "" {
+		query = query.Where("(cf_record_id = ?) OR (cf_domain = ? AND dns_type = ?)", m.CFRecordID, m.CFDomain, m.DNSType)
+	} else {
+		query = query.Where("cf_domain = ? AND dns_type = ?", m.CFDomain, m.DNSType)
+	}
+	if err := query.Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return errors.New("another monitor already manages this DNS record")
+	}
+	return nil
+}
+
+var runtimeColumns = []string{
+	"Status", "LastCheck", "FailCount", "SuccCount", "CurrentIP", "PreferredIP",
+	"CFRecordID", "PrimaryHealthy", "BackupHealthy", "PrimaryError", "BackupError",
+	"LastError", "LastSwitch",
+}
+
+func saveRuntime(tx *gorm.DB, m *Monitor) error {
+	result := tx.Model(&Monitor{}).Where("id = ?", m.ID).Select(runtimeColumns).Updates(m)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+func saveSwitch(db *gorm.DB, m *Monitor, from, kind string) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := saveRuntime(tx, m); err != nil {
+			return err
+		}
+		if kind == "manual" {
+			if err := tx.Model(m).Update("original_ip_cdn_enabled", m.OriginalIPCDNEnabled).Error; err != nil {
+				return err
+			}
+		}
+		if sameAddress(from, m.CurrentIP) {
+			return nil
+		}
+		return tx.Create(&SwitchEvent{
+			MonitorID: m.ID, Name: m.Name, FromIP: from, ToIP: m.CurrentIP,
+			ToBackup: m.CurrentIP == m.BackupIP, Type: kind, Timestamp: m.LastSwitch,
+		}).Error
+	})
+}
+
+func pruneHistory() {
+	cutoff := time.Now().AddDate(0, 0, -ConfigSnapshot().Database.HistoryRetentionDays)
+	if err := DB.Where("timestamp < ?", cutoff).Delete(&SwitchEvent{}).Error; err != nil {
+		log.Printf("Prune switch history: %v", err)
+	}
 }

@@ -4,9 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CFGuard DNS | 云端守护者</title>
-    <link rel="icon" type="image/x-icon" href="./favicon.ico">
+    <link rel="icon" type="image/png" href="./favicon.png">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -246,6 +245,23 @@
         .section-active {
             display: block;
         }
+        main { min-width: 0; min-height: 0; }
+        .status-badge { white-space: nowrap; }
+        .modal-content { max-height: calc(100dvh - 2rem); overflow-y: auto; }
+        @media (max-width: 767px) {
+            body { flex-direction: column; }
+            body .sidebar { width: 100%; flex: none; }
+            .sidebar > .p-6 { padding: 0.5rem; }
+            .sidebar > .p-6 > .flex, .sidebar > .mt-auto { display: none; }
+            .sidebar nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.25rem; }
+            .sidebar nav .nav-item { flex-direction: column; gap: 0.25rem; padding: 0.5rem 0.25rem; margin: 0; font-size: 0.75rem; }
+            main > header { padding: 0 1rem; min-height: 3.5rem; gap: 0.5rem; }
+            main > header .header-time, #section-title + span { display: none; }
+            #content-scroll { padding: 1rem; }
+            #section-strategies > .flex { gap: 1rem; flex-wrap: wrap; }
+            #strategy-list > .glass-card, body .modal-content { padding: 1rem; }
+            #strategy-list .glass-card > .flex { flex-wrap: wrap; }
+        }
     </style>
 </head>
 <body class="flex h-screen overflow-hidden">
@@ -253,7 +269,7 @@
     <aside class="sidebar w-64 flex flex-col z-50">
         <div class="p-6">
             <div class="flex items-center gap-3 mb-10">
-                <img src="./favicon.ico" alt="CFGuard Logo" class="w-12 h-12 rounded-xl shadow-lg">
+                <img src="./favicon.png" alt="CFGuard Logo" class="w-12 h-12 rounded-xl shadow-lg">
                 <div>
                     <h1 class="text-xl font-bold text-gray-800">CFGuard</h1>
                     <p class="text-xs text-gray-500">云端守护·智能切换</p>
@@ -293,8 +309,8 @@
             <div class="flex items-center gap-3">
                 <div class="w-2 h-2 rounded-full bg-green-500 pulse"></div>
                 <div>
-                    <p class="text-sm font-medium text-gray-700">系统状态</p>
-                    <p class="text-xs text-gray-500">运行正常</p>
+                    <p class="text-sm font-medium text-gray-700">运行资源</p>
+                    <p class="text-xs text-gray-500">Go 堆 <span id="stat-memory">—</span> · <span id="stat-goroutines">—</span> 协程</p>
                 </div>
             </div>
         </div>
@@ -307,7 +323,7 @@
             <div class="flex items-center gap-4">
                 <h2 id="section-title" class="text-lg font-semibold text-gray-800">控制面板</h2>
                 <span class="text-gray-300">|</span>
-                <div class="flex items-center gap-2">
+                <div class="header-time flex items-center gap-2">
                     <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                     </svg>
@@ -364,7 +380,7 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
                                 </svg>
                             </div>
-                            <span class="text-xs font-medium text-gray-500">故障</span>
+                            <span class="text-xs font-medium text-gray-500">需关注</span>
                         </div>
                         <h3 id="stat-down" class="text-3xl font-bold text-red-600 mb-1">0</h3>
                         <p class="text-sm text-gray-500">需要关注</p>
@@ -401,7 +417,7 @@
                                     <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
                                     实时更新
                                 </span>
-                                <button onclick="switchSection('strategies')" class="btn-secondary py-1 px-3 text-sm">查看全部</button>
+                                <button onclick="dnsManager.switchSection('strategies')" class="btn-secondary py-1 px-3 text-sm">查看全部</button>
                             </div>
                         </div>
                         <div id="dashboard-monitor-list" class="space-y-3">
@@ -448,7 +464,7 @@
                                 <option value="">切换凭证...</option>
                             </select>
                         </div>
-                        <button onclick="fetchZones()" class="btn-secondary flex items-center gap-2 py-2">
+                        <button onclick="dnsManager.fetchZones()" class="btn-secondary flex items-center gap-2 py-2">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
                             </svg>
@@ -469,13 +485,13 @@
                             <p class="text-gray-500 mt-1">管理当前域名的DNS记录</p>
                         </div>
                         <div class="flex gap-3">
-                            <button onclick="hideRecords()" class="text-gray-600 hover:text-gray-800 text-sm font-medium flex items-center gap-2">
+                            <button onclick="dnsManager.hideRecords()" class="text-gray-600 hover:text-gray-800 text-sm font-medium flex items-center gap-2">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
                                 </svg>
                                 返回域名列表
                             </button>
-                            <button onclick="openRecordModal()" class="btn-primary flex items-center gap-2">
+                            <button onclick="dnsManager.openRecordModal()" class="btn-primary flex items-center gap-2">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
                                 </svg>
@@ -511,7 +527,7 @@
                         <h2 class="text-2xl font-bold text-gray-800">监控策略</h2>
                         <p class="text-gray-500 mt-1">配置和管理故障切换监控策略</p>
                     </div>
-                    <button onclick="openMonitorModal()" class="btn-primary flex items-center gap-2">
+                    <button onclick="dnsManager.openMonitorModal()" class="btn-primary flex items-center gap-2">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
                         </svg>
@@ -562,7 +578,7 @@
                                         </div>
                                         <h3 class="text-lg font-semibold text-gray-800">Cloudflare 凭证</h3>
                                     </div>
-                                    <button onclick="openAccountModal()" class="btn-secondary py-2 px-4 text-sm flex items-center gap-2">
+                                    <button onclick="dnsManager.openAccountModal()" class="btn-secondary py-2 px-4 text-sm flex items-center gap-2">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
                                         </svg>
@@ -754,9 +770,9 @@
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-2">检测类型</label>
                             <select id="monitor-check-type" class="input-field w-full">
-                                <option value="ping">Ping</option>
+                                <option value="ping">Ping（仅检测网络连通）</option>
                                 <option value="http">HTTP</option>
-                                <option value="https">HTTPS</option>
+                                <option value="https" selected>HTTPS（网站推荐）</option>
                             </select>
                         </div>
                         <div>
@@ -798,9 +814,27 @@
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-2">超时（秒）</label>
-                            <input id="monitor-timeout-seconds" type="number" min="1" class="input-field w-full" value="2">
+                            <input id="monitor-timeout-seconds" type="number" min="1" max="120" class="input-field w-full" value="5">
                         </div>
                     </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label for="monitor-dns-ttl" class="block text-sm font-medium text-gray-700 mb-2">DNS TTL（秒）</label>
+                            <input id="monitor-dns-ttl" type="number" min="0" max="86400" class="input-field w-full" value="60">
+                            <p class="text-xs text-gray-500 mt-2">0 保留现值；1 自动；其余为 60–86400。代理开启时自动设为 1。</p>
+                        </div>
+                        <div>
+                            <label for="monitor-expected-status" class="block text-sm font-medium text-gray-700 mb-2">期望 HTTP 状态码</label>
+                            <input id="monitor-expected-status" type="number" min="0" max="299" class="input-field w-full" value="0">
+                            <p class="text-xs text-gray-500 mt-2">0 接受任意 2xx；也可填写 200 或 204 等具体成功状态码。</p>
+                        </div>
+                    </div>
+                    <label class="flex items-center gap-3 text-sm font-medium text-gray-700">
+                        <input id="monitor-insecure-tls" type="checkbox" class="checkbox-field">
+                        允许源站自签名 / Cloudflare Origin CA 证书（跳过证书校验）
+                    </label>
+                    <p class="text-xs text-gray-500">网站故障请使用 HTTP/HTTPS，并选择能反映业务状态的健康检查路径。Ping 成功无法说明网站能正常访问。</p>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <label class="flex items-center gap-3 text-sm font-medium text-gray-700">
@@ -938,13 +972,13 @@
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-2">间隔（小时）</label>
-                            <input type="number" min="1" id="schedule-hours" class="input-field w-full" placeholder="例如：1">
-                            <p class="text-xs text-gray-500 mt-2">到点后触发一次切换（循环）</p>
+                            <input type="number" min="1" max="23" id="schedule-hours" class="input-field w-full" placeholder="例如：2">
+                            <p class="text-xs text-gray-500 mt-2">按当地时区的整点执行；每到新的一天重新计算。</p>
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">切换到的 IP（可选）</label>
-                            <input type="text" id="schedule-ip" class="input-field w-full" placeholder="留空则主/备互换">
-                            <p class="text-xs text-gray-500 mt-2">留空：主/备来回切；填写：固定切到该 IP</p>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">切换到的地址</label>
+                            <input type="text" id="schedule-ip" class="input-field w-full" placeholder="填写该策略的主地址或备用地址">
+                            <p class="text-xs text-gray-500 mt-2">目标健康时才切换；此后优先使用该地址，并继续故障保护。</p>
                         </div>
                     </div>
 

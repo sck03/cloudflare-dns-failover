@@ -1,8 +1,8 @@
-import { state } from '../state.js';
 import { apiRequest } from '../api.js';
 import { showNotification } from './notifications.js';
 import { openAccountModal } from './modals.js';
 import { fetchZones } from './domains.js';
+import { escapeHTML } from '../format.js';
 
 export async function loadSettings() {
     try {
@@ -68,13 +68,13 @@ function renderCloudflareAccounts(accounts, activeIndex) {
             <div class="p-4 rounded-lg border ${isActive ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}">
                 <div class="flex items-center justify-between mb-2">
                     <div class="flex items-center gap-2">
-                        <h4 class="font-medium text-gray-800">${account.name || '(未命名)'}</h4>
+                        <h4 class="font-medium text-gray-800">${escapeHTML(account.name || '(未命名)')}</h4>
                         ${isActive ? '<span class="px-2 py-1 text-xs rounded-full bg-blue-500 text-white">当前使用</span>' : ''}
                     </div>
                     <div class="flex gap-2">
-                        ${!isActive ? `<button onclick="dnsManager.activateAccount('${account.id}')" class="text-sm text-blue-600 hover:text-blue-800">激活</button>` : ''}
-                        <button onclick="dnsManager.editAccount('${account.id}')" class="text-sm text-gray-600 hover:text-gray-800">编辑</button>
-                        <button onclick="dnsManager.deleteAccount('${account.id}')" class="text-sm text-red-600 hover:text-red-800">删除</button>
+                        ${!isActive ? `<button data-account-action="activate" data-account-id="${escapeHTML(account.id)}" class="text-sm text-blue-600 hover:text-blue-800">激活</button>` : ''}
+                        <button data-account-action="edit" data-account-id="${escapeHTML(account.id)}" class="text-sm text-gray-600 hover:text-gray-800">编辑</button>
+                        <button data-account-action="delete" data-account-id="${escapeHTML(account.id)}" class="text-sm text-red-600 hover:text-red-800">删除</button>
                     </div>
                 </div>
                 <div class="text-xs text-gray-500">
@@ -82,12 +82,18 @@ function renderCloudflareAccounts(accounts, activeIndex) {
                 </div>
                 ${account.email ? `
                 <div class="text-xs text-gray-500 mt-1">
-                    旧版凭证: ${account.email} / ••••••
+                    旧版凭证: ${escapeHTML(account.email)} / ••••••
                 </div>
                 ` : ''}
             </div>
         `;
     }).join('');
+    container.onclick = event => {
+        const button = event.target.closest('[data-account-action]');
+        if (!button) return;
+        const actions = { activate: activateAccount, edit: editAccount, delete: deleteAccount };
+        actions[button.dataset.accountAction]?.(button.dataset.accountId);
+    };
 }
 
 export async function editAccount(accountId) {
@@ -108,7 +114,7 @@ export async function editAccount(accountId) {
 export async function deleteAccount(accountId) {
     if (!confirm('确定要删除这个凭证吗？')) return;
     try {
-        await apiRequest(`/api/cloudflare-accounts/${accountId}`, { method: 'DELETE' });
+        await apiRequest(`/api/cloudflare-accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' });
         showNotification('删除成功', 'success');
         await loadCloudflareAccounts();
     } catch (error) {
@@ -119,7 +125,7 @@ export async function deleteAccount(accountId) {
 
 export async function activateAccount(accountId) {
     try {
-        await apiRequest(`/api/cloudflare-accounts/${accountId}/activate`, { method: 'POST' });
+        await apiRequest(`/api/cloudflare-accounts/${encodeURIComponent(accountId)}/activate`, { method: 'POST' });
         showNotification('凭证已激活', 'success');
         await loadCloudflareAccounts();
         await fetchZones();
@@ -132,7 +138,7 @@ export async function activateAccount(accountId) {
 export async function switchAccount(accountId) {
     if (!accountId) return;
     try {
-        await apiRequest(`/api/cloudflare-accounts/${accountId}/activate`, { method: 'POST' });
+        await apiRequest(`/api/cloudflare-accounts/${encodeURIComponent(accountId)}/activate`, { method: 'POST' });
         showNotification('凭证已切换', 'success');
         await updateAccountSwitcher();
         await fetchZones();
@@ -158,7 +164,7 @@ export async function updateAccountSwitcher() {
         if (switcher) {
             switcher.innerHTML = '<option value="">切换凭证...</option>' +
                 accounts.map((acc, idx) => 
-                    `<option value="${acc.id}" ${idx === activeIndex ? 'disabled' : ''}>${acc.name}${idx === activeIndex ? ' (当前)' : ''}</option>`
+                    `<option value="${escapeHTML(acc.id)}" ${idx === activeIndex ? 'disabled' : ''}>${escapeHTML(acc.name)}${idx === activeIndex ? ' (当前)' : ''}</option>`
                 ).join('');
         }
     } catch (error) {
@@ -192,7 +198,7 @@ export async function saveSettings() {
     };
     
     try {
-        const response = await fetch(`${state.baseURL}/api/config`, {
+        await apiRequest('/api/config', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -200,18 +206,7 @@ export async function saveSettings() {
             body: JSON.stringify(config)
         });
         
-        if (response.ok) {
-            showNotification('设置保存成功', 'success');
-        } else {
-            let msg = `保存失败: ${response.status}`;
-            try {
-                const payload = await response.json();
-                msg = payload?.msg || payload?.message || msg;
-            } catch {
-                // ignore
-            }
-            showNotification(msg, 'error');
-        }
+        showNotification('设置保存成功', 'success');
     } catch (error) {
         console.error('保存设置失败:', error);
         showNotification(`保存失败: ${error.message || error}`, 'error');

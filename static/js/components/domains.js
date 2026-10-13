@@ -1,14 +1,16 @@
 import { state } from '../state.js';
 import { apiRequest } from '../api.js';
 import { showNotification } from './notifications.js';
+import { escapeHTML } from '../format.js';
 
 export async function fetchZones() {
     try {
         const zones = await apiRequest('/api/zones');
+        document.getElementById('stat-zones').textContent = zones.length;
         renderZones(zones);
     } catch (error) {
         console.error('获取域名列表失败:', error);
-        showNotification('获取域名列表失败', 'error');
+        showNotification(`获取域名列表失败：${error.message}`, 'error');
     }
 }
 
@@ -42,7 +44,7 @@ function renderZones(zones) {
                                 <path d="M12.5 2L2 7.5v9L12.5 22l10.5-5.5v-9L12.5 2zm0 2.311L20.689 8.5 12.5 12.689 4.311 8.5 12.5 4.311zM4 10.311l7.5 3.939v7.439L4 17.75v-7.439zm9.5 11.378v-7.439l7.5-3.939v7.439l-7.5 3.939z"/>
                             </svg>
                         </div>
-                        <h3 class="font-bold text-gray-800 text-lg">${zone.name}</h3>
+                        <h3 class="font-bold text-gray-800 text-lg">${escapeHTML(zone.name)}</h3>
                     </div>
                     <div class="flex items-center gap-2 flex-wrap">
                         <span class="flex items-center gap-1 px-3 py-1 text-xs rounded-full ${zone.status === 'active' ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-gray-100 text-gray-800 border border-gray-200'}">
@@ -61,7 +63,7 @@ function renderZones(zones) {
             <div class="space-y-3 mb-4">
                 <div class="p-3 bg-gradient-to-r from-gray-50 to-gray-100 rounded-lg">
                     <div class="text-xs text-gray-500 mb-1">Zone ID</div>
-                    <div class="font-mono text-xs text-gray-700 break-all">${zone.id}</div>
+                    <div class="font-mono text-xs text-gray-700 break-all">${escapeHTML(zone.id)}</div>
                 </div>
                 <div class="flex items-center justify-between text-sm">
                     <span class="flex items-center gap-1 text-gray-500">
@@ -75,7 +77,7 @@ function renderZones(zones) {
             </div>
             
             <div class="mt-6">
-                <button onclick="dnsManager.viewRecords('${zone.id}', '${zone.name}')" 
+                <button data-zone-id="${escapeHTML(zone.id)}" data-zone-name="${escapeHTML(zone.name)}"
                         class="w-full btn-primary flex items-center justify-center gap-2 py-3">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
@@ -86,6 +88,10 @@ function renderZones(zones) {
             </div>
         </div>
     `).join('');
+    container.onclick = event => {
+        const button = event.target.closest('[data-zone-id]');
+        if (button) viewRecords(button.dataset.zoneId, button.dataset.zoneName);
+    };
 }
 
 export async function viewRecords(zoneId, zoneName) {
@@ -117,7 +123,7 @@ export async function deleteRecord(recordId) {
         await fetchRecords(state.currentZoneId);
     } catch (error) {
         console.error('删除DNS记录失败:', error);
-        showNotification('删除DNS记录失败', 'error');
+        showNotification(error.message || '删除DNS记录失败', 'error');
     }
 }
 
@@ -128,7 +134,7 @@ export async function fetchRecords(zoneId) {
         renderRecords(state.recordsCache);
     } catch (error) {
         console.error('获取DNS记录失败:', error);
-        showNotification('获取DNS记录失败', 'error');
+        showNotification(`获取DNS记录失败：${error.message}`, 'error');
     }
 }
 
@@ -154,13 +160,13 @@ function renderRecords(records) {
         <tr class="table-row">
             <td class="py-4 px-6">
                 <span class="px-3 py-1 text-xs rounded-full bg-blue-100 text-blue-800 font-medium">
-                    ${record.type}
+                    ${escapeHTML(record.type)}
                 </span>
             </td>
-            <td class="py-4 px-6 font-medium text-gray-800">${record.name}</td>
+            <td class="py-4 px-6 font-medium text-gray-800">${escapeHTML(record.name)}</td>
             <td class="py-4 px-6">
-                <div class="max-w-xs truncate" title="${record.content}">
-                    ${record.content}
+                <div class="max-w-xs truncate" title="${escapeHTML(record.content)}">
+                    ${escapeHTML(record.content)}
                 </div>
             </td>
             <td class="py-4 px-6">
@@ -168,14 +174,14 @@ function renderRecords(records) {
                     ${record.proxied ? '已代理' : '未代理'}
                 </span>
             </td>
-            <td class="py-4 px-6 text-gray-600">${record.ttl}</td>
+            <td class="py-4 px-6 text-gray-600">${Number(record.ttl)}</td>
             <td class="py-4 px-6">
                 <div class="flex gap-2">
-                    <button onclick="dnsManager.editRecord('${record.id}')" 
+                    <button data-record-action="editRecord" data-record-id="${escapeHTML(record.id)}"
                             class="text-blue-600 hover:text-blue-800 text-sm font-medium">
                         编辑
                     </button>
-                    <button onclick="dnsManager.deleteRecord('${record.id}')" 
+                    <button data-record-action="deleteRecord" data-record-id="${escapeHTML(record.id)}"
                             class="text-red-600 hover:text-red-800 text-sm font-medium">
                         删除
                     </button>
@@ -183,4 +189,8 @@ function renderRecords(records) {
             </td>
         </tr>
     `).join('');
+    container.onclick = event => {
+        const button = event.target.closest('[data-record-action]');
+        if (button) window.dnsManager[button.dataset.recordAction](button.dataset.recordId);
+    };
 }

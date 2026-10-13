@@ -1,47 +1,22 @@
-# Multi-stage build for Go
-FROM golang:1.23-alpine AS builder
-
-# Install build dependencies
-RUN apk add --no-cache git
-
-WORKDIR /app
-
-# Copy source code
+# syntax=docker/dockerfile:1
+FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine3.24 AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
 COPY . .
+ARG TARGETOS
+ARG TARGETARCH
+ARG TARGETVARIANT
+ARG VERSION=dev
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} \
+    go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o /out/cfguard .
 
-# Download dependencies and generate go.sum
-RUN go mod tidy
-
-# Build the application
-# CGO_ENABLED=0 creates a statically linked binary
-# -ldflags="-s -w" strips debug information to reduce binary size
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o cfguard .
-
-# Final stage
-FROM alpine:latest
-
+FROM alpine:3.24.2
+RUN apk add --no-cache ca-certificates tzdata iputils && mkdir -p /app/config /app/instance
 WORKDIR /app
-
-# Install runtime dependencies
-# ca-certificates for HTTPS (Cloudflare API)
-# tzdata for Timezone
-# iputils for ping command
-RUN apk add --no-cache ca-certificates tzdata iputils
-
-# Copy binary from builder
-COPY --from=builder /app/cfguard .
-
-# Copy example config as default config
-COPY --from=builder /app/config.example.yaml ./config/config.yaml
-
-# Create instance directory for DB
-RUN mkdir -p config instance
-
-# Set environment variables
+COPY --from=builder /out/cfguard ./cfguard
 ENV TZ=Asia/Shanghai
-
-# Expose port
 EXPOSE 8099
-
-# Run the binary
-CMD ["./cfguard"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["./cfguard", "-healthcheck"]
+ENTRYPOINT ["./cfguard"]

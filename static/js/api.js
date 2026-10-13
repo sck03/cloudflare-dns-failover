@@ -2,7 +2,7 @@ import { state } from './state.js';
 
 export async function apiRequest(path, options = {}) {
     const url = `${state.baseURL}${path}`;
-    const response = await fetch(url, options);
+    const response = await fetch(url, { ...options, signal: options.signal || AbortSignal.timeout(150000) });
 
     let payload = null;
     try {
@@ -17,7 +17,7 @@ export async function apiRequest(path, options = {}) {
     }
 
     if (!response.ok) {
-        const message = payload?.msg || payload?.message || `请求失败: ${response.status}`;
+        const message = payload?.error || payload?.msg || payload?.message || `请求失败: ${response.status}`;
         throw new Error(message);
     }
 
