@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} \
     go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o /out/cfguard .
 
-FROM alpine:3.24.2
+FROM alpine:3.24.3
 RUN apk add --no-cache ca-certificates tzdata iputils && mkdir -p /app/config /app/instance
 WORKDIR /app
 COPY --from=builder /out/cfguard ./cfguard
