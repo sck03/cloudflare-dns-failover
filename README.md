@@ -4,7 +4,7 @@
 
 用 Go 监控主、备源站，并在故障时更新 Cloudflare DNS。提供 Web 管理、计划切换、多账号、IPv4 / IPv6 / CNAME，以及钉钉、Telegram、邮件通知。
 
-当前工具链为 **Go 1.27.2**；GitHub Actions 版本于 **2026-10-13** 对照官方稳定发行核实，固定到对应提交。项目使用 Go 标准库 HTTP 路由、SQLite 和独立的检测 / 决策 / DNS 模块。
+当前工具链为 **Go 1.27.3**；GitHub Actions 版本于 **2026-10-13** 对照官方稳定发行核实，固定到对应提交。项目使用 Go 标准库 HTTP 路由、SQLite 和独立的检测 / 决策 / DNS 模块。
 
 **网站监控应选 HTTP/HTTPS。** Ping 只能证明网络可达，不能发现网站返回 500、502、503 等应用故障。请填写真实源站地址，使用能反映业务状态的健康检查 URL。
 
@@ -107,7 +107,9 @@ GitHub 上的 `Build and publish` 工作流在 `main` 推送、版本标签或�
 - 测试通过后交叉编译 Linux 三种架构和 Windows amd64；可在 Actions 的 `cfguard-binaries` 附件下载程序、示例配置和 SHA256 校验文件。
 - 验证容器启动、自定义端口健康检查、Ping 和正常停机，再推送多架构 GHCR 镜像，提供 `latest`、提交 SHA 和版本标签。测试失败时不进入发布步骤。
 
-本地使用 Go 1.27.2：
+Dependabot 每周检查 Go 依赖、GitHub Actions 和 Docker 基础镜像，并创建升级 PR，合并前必须通过 CI。CI 的测试和交叉编译统一读取 `Dockerfile` 中的 Go 构建镜像版本，确保镜像升级 PR 使用新工具链完成漏洞检查；`go.mod` 声明最低支持版本。Go 1.27.3 修复了标准库证书验证漏洞 [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809)。
+
+本地使用 Go 1.27.3：
 
 ```bash
 go test ./...
