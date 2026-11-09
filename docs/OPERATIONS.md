@@ -51,17 +51,23 @@ DNS 更新后还需考虑旧 TTL、Cloudflare 内部传播、递归解析器 / �
 | `GET /api/zones` | 当前管理账号的 Zone 列表，自动分页 |
 | `GET/POST /api/zones/{zoneId}/records` | DNS 列表 / 创建 |
 | `PUT/DELETE /api/zones/{zoneId}/records/{recordId}` | 修改 / 删除未受监控管理的记录 |
-| `GET/POST /api/config` | 读取 / 保存管理账号 Token 与通知设置 |
+| `GET/POST /api/config` | 读取 Token 是否已设置及通知设置 / 保存 Token 与通知设置 |
 | `/api/cloudflare-accounts` | 账号列表 / 创建；`PUT/DELETE /{id}` 修改 / 删除，`POST /{id}/activate` 激活管理账号 |
 
 监控 JSON 使用 `account_name`、`cf_domain`、`cf_zone_id`；对应的 YAML 字段分别是 `account`、`domain`、`zone_id`。其余监控字段参照示例。
 
 `PUT` 中不提供 `schedules` 则保留已有计划；显式传 `"schedules":[]` 则清空。简化计划接口只改计划，不覆盖策略其他字段。手动 / 计划失败会返回非 2xx 和 `{"error":"具体原因"}`。
 
+Cloudflare 凭证为只写字段：账号列表返回 `has_api_token` / `has_api_key`，配置接口返回 `cloudflare.has_api_token`。保存时空 Token / API Key 保留当前值；新值替换旧值。通知配置保持管理员可读。DNS 创建、修改、删除接口均保护监控所管理的记录，包括尚未发现或已经失效的 `cf_record_id`。
+
+DNS 记录的 `name` 使用完整名称（例如 `api.example.com` 或 `example.com`），不接受 `api`、`@` 等简写，以确保名称校验与监控归属检查一致。
+
+计划目标会统一规范化 IPv6、域名大小写和末尾点，再核对是否属于主备地址；API / YAML 均使用同一校验。配置文件只使用 `config/config.yaml`，未知字段或多个 YAML 文档会报错。
+
 ## 日常维护
 
 配置和数据库是持久化数据，不能放到镜像构建上下文或提交到 Git。使用停机备份或 SQLite 的在线备份机制；不要只复制仍在写入的单个 `.db` 文件。
 
-默认事件保留 30 天。通知队列满时会记录日志，避免无限创建工作协程。启用 `server.debug` 可记录 HTTP 方法与路径，默认关闭以减少日志开销。
+默认事件保留 30 天。通知队列满时会记录日志，避免无限创建工作协程；通知是尽力发送，停机取消未完成通知，不保证投递。监控每次入队读取最新通知配置，已排队事件保留入队时的配置。启用 `server.debug` 可记录 HTTP 方法与路径，默认关闭以减少日志开销。
 
 工作流失败时，在 [Actions](https://github.com/sck03/cloudflare-dns-failover/actions) 查看失败步骤及其日志。`cfguard-binaries` 附件包含 SHA256 校验；镜像可固定 `sha-xxxxxxx` 标签或摘要，避免升级时版本不明确。

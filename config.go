@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,14 +27,16 @@ type AccountConfig struct {
 	ApiKey   string `yaml:"api_key"`
 }
 
+type ServerConfig struct {
+	Port                int    `yaml:"port"`
+	Debug               bool   `yaml:"debug"`
+	AuthEnabled         bool   `yaml:"auth_enabled"`
+	JwtSecret           string `yaml:"jwt_secret"`
+	MaxConcurrentChecks int    `yaml:"max_concurrent_checks"`
+}
+
 type Config struct {
-	Server struct {
-		Port                int    `yaml:"port"`
-		Debug               bool   `yaml:"debug"`
-		AuthEnabled         bool   `yaml:"auth_enabled"`
-		JwtSecret           string `yaml:"jwt_secret"`
-		MaxConcurrentChecks int    `yaml:"max_concurrent_checks"`
-	} `yaml:"server"`
+	Server   ServerConfig `yaml:"server"`
 	Database struct {
 		Path                 string `yaml:"path"`
 		HistoryRetentionDays int    `yaml:"history_retention_days"`
@@ -75,6 +79,20 @@ func ConfigSnapshot() Config {
 	configMutex.RLock()
 	defer configMutex.RUnlock()
 	return cloneConfig(AppConfig)
+}
+
+// Request authentication and DNS probes need small value copies, not a deep
+// clone of every bootstrap monitor and schedule on each request.
+func serverConfig() ServerConfig {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return AppConfig.Server
+}
+
+func notificationConfig() NotificationConfig {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return AppConfig.Notification
 }
 
 func cloneConfig(config Config) Config {
@@ -139,16 +157,11 @@ func saveConfig(path string, config Config) error {
 }
 
 func LoadConfig() error {
-	for _, path := range []string{"config/config.yaml", "config.yaml"} {
-		data, err := os.ReadFile(path)
-		if os.IsNotExist(err) {
-			continue
-		}
+	const path = "config/config.yaml"
+	data, err := os.ReadFile(path)
+	if err == nil {
+		config, err := parseConfig(data)
 		if err != nil {
-			return err
-		}
-		var config Config
-		if err := yaml.Unmarshal(data, &config); err != nil {
 			return fmt.Errorf("parse %s: %w", path, err)
 		}
 		if err := validateConfig(&config); err != nil {
@@ -159,7 +172,10 @@ func LoadConfig() error {
 		configMutex.Unlock()
 		return nil
 	}
-	data, err := exampleConfig.ReadFile("config.example.yaml")
+	if !os.IsNotExist(err) {
+		return err
+	}
+	data, err = exampleConfig.ReadFile("config.example.yaml")
 	if err != nil {
 		return err
 	}
@@ -170,6 +186,19 @@ func LoadConfig() error {
 		return err
 	}
 	return ErrConfigCreated
+}
+
+func parseConfig(data []byte) (Config, error) {
+	var config Config
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&config); err != nil {
+		return config, err
+	}
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return config, errors.New("configuration must contain exactly one YAML document")
+	}
+	return config, nil
 }
 
 func validateConfig(config *Config) error {

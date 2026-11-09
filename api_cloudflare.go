@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -37,9 +38,12 @@ func GetZoneRecords(w http.ResponseWriter, r *http.Request) {
 func CreateRecord(w http.ResponseWriter, r *http.Request) { saveRecord(w, r, "") }
 func UpdateRecord(w http.ResponseWriter, r *http.Request) { saveRecord(w, r, r.PathValue("recordId")) }
 
-func unmanagedRecord(w http.ResponseWriter, r *http.Request) bool {
+func unmanagedRecord(w http.ResponseWriter, r *http.Request, record *CloudflareRecord) bool {
 	var count int64
-	if err := DB.Model(&Monitor{}).Where("cf_zone_id = ? AND cf_record_id = ?", r.PathValue("zoneId"), r.PathValue("recordId")).Count(&count).Error; err != nil {
+	query := DB.WithContext(r.Context()).Model(&Monitor{}).Where("cf_zone_id = ?", r.PathValue("zoneId")).
+		Where("(cf_record_id = ? AND cf_record_id <> '') OR (cf_domain = ? AND dns_type = ?)", record.ID,
+			strings.ToLower(strings.TrimSuffix(record.Name, ".")), strings.ToUpper(record.Type))
+	if err := query.Count(&count).Error; err != nil {
 		apiError(w, 500, err)
 		return false
 	}
@@ -58,12 +62,39 @@ func saveRecord(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	managementMutex.Lock()
 	defer managementMutex.Unlock()
-	if id != "" && !unmanagedRecord(w, r) {
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	record, err := cfClient.SaveRecord(ctx, credentials(GetActiveAccountConfig()), r.PathValue("zoneId"), id, payload)
+	auth := credentials(GetActiveAccountConfig())
+	candidate := &CloudflareRecord{}
+	if id != "" {
+		record, err := cfClient.Record(ctx, auth, r.PathValue("zoneId"), id)
+		if err != nil {
+			apiError(w, http.StatusBadGateway, err)
+			return
+		}
+		if !unmanagedRecord(w, r, record) {
+			return
+		}
+		*candidate = *record
+	}
+	if name, ok := payload["name"].(string); ok {
+		candidate.Name = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
+		// Require the same fully-qualified identity used by monitor ownership
+		// checks; provider expansion of "@" or short names must not bypass them.
+		if !strings.Contains(candidate.Name, ".") || !validHostname(strings.TrimPrefix(candidate.Name, "*.")) {
+			apiError(w, http.StatusBadRequest, errors.New("record name must be a full DNS name, such as api.example.com"))
+			return
+		}
+		payload["name"] = candidate.Name
+	}
+	if kind, ok := payload["type"].(string); ok {
+		candidate.Type = strings.ToUpper(strings.TrimSpace(kind))
+		payload["type"] = candidate.Type
+	}
+	if !unmanagedRecord(w, r, candidate) {
+		return
+	}
+	record, err := cfClient.SaveRecord(ctx, auth, r.PathValue("zoneId"), id, payload)
 	if err != nil {
 		apiError(w, http.StatusBadGateway, err)
 		return
@@ -74,12 +105,18 @@ func saveRecord(w http.ResponseWriter, r *http.Request, id string) {
 func DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	managementMutex.Lock()
 	defer managementMutex.Unlock()
-	if !unmanagedRecord(w, r) {
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	if err := cfClient.DeleteRecord(ctx, credentials(GetActiveAccountConfig()), r.PathValue("zoneId"), r.PathValue("recordId")); err != nil {
+	auth := credentials(GetActiveAccountConfig())
+	record, err := cfClient.Record(ctx, auth, r.PathValue("zoneId"), r.PathValue("recordId"))
+	if err != nil {
+		apiError(w, http.StatusBadGateway, err)
+		return
+	}
+	if !unmanagedRecord(w, r, record) {
+		return
+	}
+	if err := cfClient.DeleteRecord(ctx, auth, r.PathValue("zoneId"), r.PathValue("recordId")); err != nil {
 		apiError(w, http.StatusBadGateway, err)
 		return
 	}

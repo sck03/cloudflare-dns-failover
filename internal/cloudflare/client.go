@@ -156,11 +156,12 @@ func (c *Client) request(ctx context.Context, auth Credentials, method, path str
 }
 
 func retryDelay(value string) time.Duration {
+	value = strings.TrimSpace(value)
 	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
 		return time.Duration(min(seconds, 3600)) * time.Second
 	}
 	if until, err := http.ParseTime(value); err == nil {
-		return time.Until(until)
+		return min(max(time.Until(until), 0), time.Hour)
 	}
 	return 0
 }

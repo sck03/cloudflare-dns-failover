@@ -2,12 +2,17 @@ import { state } from '../state.js';
 import { apiRequest } from '../api.js';
 import { showNotification } from './notifications.js';
 import { escapeHTML } from '../format.js';
+import { LatestRequest } from '../requests.js';
+
+const zoneRequest = new LatestRequest();
+const recordRequest = new LatestRequest();
 
 export async function fetchZones() {
     try {
-        const zones = await apiRequest('/api/zones');
-        document.getElementById('stat-zones').textContent = zones.length;
-        renderZones(zones);
+        await zoneRequest.run('/api/zones', zones => {
+            document.getElementById('stat-zones').textContent = zones.length;
+            renderZones(zones);
+        });
     } catch (error) {
         console.error('获取域名列表失败:', error);
         showNotification(`获取域名列表失败：${error.message}`, 'error');
@@ -95,6 +100,8 @@ function renderZones(zones) {
 }
 
 export async function viewRecords(zoneId, zoneName) {
+    state.recordsCache = [];
+    renderRecords([]);
     state.currentZoneId = zoneId;
     state.currentZoneName = zoneName;
     
@@ -106,10 +113,21 @@ export async function viewRecords(zoneId, zoneName) {
 }
 
 export function hideRecords() {
+    recordRequest.cancel();
+    state.recordsCache = [];
     document.getElementById('zone-list').classList.remove('hidden');
     document.getElementById('records-container').classList.add('hidden');
     state.currentZoneId = null;
     state.currentZoneName = null;
+}
+
+export function resetDomains() {
+    zoneRequest.cancel();
+    hideRecords();
+    state.editingRecordId = null;
+    document.getElementById('record-modal')?.classList.add('hidden');
+    document.getElementById('zone-list').replaceChildren();
+    document.getElementById('stat-zones').textContent = '—';
 }
 
 export async function deleteRecord(recordId) {
@@ -128,10 +146,12 @@ export async function deleteRecord(recordId) {
 }
 
 export async function fetchRecords(zoneId) {
+    if (!zoneId || zoneId !== state.currentZoneId) return;
     try {
-        const records = await apiRequest(`/api/zones/${zoneId}/records`);
-        state.recordsCache = Array.isArray(records) ? records : [];
-        renderRecords(state.recordsCache);
+        await recordRequest.run(`/api/zones/${zoneId}/records`, records => {
+            state.recordsCache = records;
+            renderRecords(records);
+        });
     } catch (error) {
         console.error('获取DNS记录失败:', error);
         showNotification(`获取DNS记录失败：${error.message}`, 'error');

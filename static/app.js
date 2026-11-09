@@ -45,16 +45,24 @@ class DNSManager {
     }
 
     async refreshVisible() {
-        if (this.refreshing || document.hidden) return;
+        if (document.hidden) {
+            state.refreshController?.abort();
+            return;
+        }
+        if (this.refreshing) return;
         this.refreshing = true;
+        const controller = new AbortController();
+        state.refreshController = controller;
         try {
             if (!document.getElementById('section-dashboard').classList.contains('hidden')) {
-                await this.loadDashboardData();
+                await this.loadDashboardData(controller.signal);
             } else if (!document.getElementById('section-strategies').classList.contains('hidden')) {
-                await this.fetchMonitors();
+                await this.fetchMonitors(controller.signal);
             }
         } finally {
+            if (state.refreshController === controller) state.refreshController = null;
             this.refreshing = false;
+            if (controller.signal.aborted && !document.hidden) this.refreshVisible();
         }
     }
 }

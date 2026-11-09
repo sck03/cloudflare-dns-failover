@@ -591,9 +591,9 @@
                                 </div>
 
                                 <div class="space-y-3 pt-4 border-t border-gray-200">
-                                    <label class="block text-sm font-medium text-gray-700">默认 API Token（兼容旧配置）</label>
+                                    <label class="block text-sm font-medium text-gray-700">当前管理账号 API Token</label>
                                     <input type="password" id="set-cf-token" class="input-field w-full" placeholder="输入您的 Cloudflare API Token">
-                                    <p class="text-xs text-gray-500">如果未配置多凭证，将使用此默认 Token。</p>
+                                    <p class="text-xs text-gray-500">留空保留已有 Token；填写新值替换当前管理账号的 Token。没有账号时创建 default。</p>
                                 </div>
                             </div>
 
@@ -890,7 +890,7 @@
 
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">名称</label>
-                        <input id="record-name" class="input-field w-full" placeholder="例如：api">
+                        <input id="record-name" class="input-field w-full" placeholder="完整名称，例如：api.example.com">
                     </div>
 
                     <div>

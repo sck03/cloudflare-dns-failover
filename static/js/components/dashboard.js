@@ -3,9 +3,9 @@ import { apiRequest } from '../api.js';
 import { escapeHTML, formatTime, monitorStatus } from '../format.js';
 import { showNotification } from './notifications.js';
 
-export async function loadDashboardData() {
+export async function loadDashboardData(signal) {
     try {
-        const status = await apiRequest('/api/status');
+        const status = await apiRequest('/api/status', { signal });
         const monitors = status.monitors || [];
         state.monitorsCache = monitors;
         const healthy = monitors.filter(m => m.status === 'Normal').length;
@@ -39,6 +39,7 @@ export async function loadDashboardData() {
                 <div class="text-xs text-gray-500">${formatTime(event.timestamp)} · ${escapeHTML(event.type)}</div>
             </div>`).join('') : '<p class="p-3 text-sm text-gray-500">暂无切换事件</p>';
     } catch (error) {
+        if (error.name === 'AbortError') return;
         const global = document.getElementById('global-status');
         if (global) {
             global.className = 'status-badge status-error';

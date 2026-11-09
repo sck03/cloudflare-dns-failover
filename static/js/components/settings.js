@@ -1,7 +1,7 @@
 import { apiRequest } from '../api.js';
 import { showNotification } from './notifications.js';
 import { openAccountModal } from './modals.js';
-import { fetchZones } from './domains.js';
+import { fetchZones, resetDomains } from './domains.js';
 import { escapeHTML } from '../format.js';
 
 export async function loadSettings() {
@@ -9,7 +9,9 @@ export async function loadSettings() {
         const config = await apiRequest('/api/config');
         
         if (config.cloudflare) {
-            document.getElementById('set-cf-token').value = config.cloudflare.api_token || '';
+            const token = document.getElementById('set-cf-token');
+            token.value = '';
+            token.placeholder = config.cloudflare.has_api_token ? '已设置，留空保留' : '填写 API Token';
         }
         
         if (config.dingtalk) {
@@ -78,9 +80,9 @@ function renderCloudflareAccounts(accounts, activeIndex) {
                     </div>
                 </div>
                 <div class="text-xs text-gray-500">
-                    Token: ${account.api_token ? '••••••' : '(未设置)'}
+                    Token: ${account.has_api_token ? '已设置' : '(未设置)'}
                 </div>
-                ${account.email ? `
+                ${account.has_api_key ? `
                 <div class="text-xs text-gray-500 mt-1">
                     旧版凭证: ${escapeHTML(account.email)} / ••••••
                 </div>
@@ -124,29 +126,19 @@ export async function deleteAccount(accountId) {
 }
 
 export async function activateAccount(accountId) {
+    if (!accountId) return;
     try {
         await apiRequest(`/api/cloudflare-accounts/${encodeURIComponent(accountId)}/activate`, { method: 'POST' });
+        resetDomains();
         showNotification('凭证已激活', 'success');
-        await loadCloudflareAccounts();
-        await fetchZones();
+        await Promise.all([loadCloudflareAccounts(), updateAccountSwitcher(), fetchZones()]);
     } catch (error) {
         console.error('激活凭证失败:', error);
         showNotification('激活失败', 'error');
     }
 }
 
-export async function switchAccount(accountId) {
-    if (!accountId) return;
-    try {
-        await apiRequest(`/api/cloudflare-accounts/${encodeURIComponent(accountId)}/activate`, { method: 'POST' });
-        showNotification('凭证已切换', 'success');
-        await updateAccountSwitcher();
-        await fetchZones();
-    } catch (error) {
-        console.error('切换凭证失败:', error);
-        showNotification('切换失败', 'error');
-    }
-}
+export const switchAccount = activateAccount;
 
 export async function updateAccountSwitcher() {
     try {

@@ -64,11 +64,6 @@ func SeedMonitors() error {
 		if err := tx.Model(&Monitor{}).Count(&count).Error; err != nil {
 			return err
 		}
-		if account := GetActiveAccountConfig(); account != nil {
-			if err := tx.Model(&Monitor{}).Where("account_name = ''").Update("account_name", account.Name).Error; err != nil {
-				return err
-			}
-		}
 		// Existing installations keep all UI changes. YAML is only a bootstrap source.
 		if count == 0 {
 			for _, config := range ConfigSnapshot().Monitors {

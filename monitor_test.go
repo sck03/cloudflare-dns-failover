@@ -315,3 +315,56 @@ func TestRemovedScheduleCannotRunAnAlreadyQueuedSwitch(t *testing.T) {
 		t.Fatal("deleted schedule changed DNS")
 	}
 }
+
+func TestManualSwitchCanceledAndJoinedOnStop(t *testing.T) {
+	testDatabase(t)
+	m := createTestMonitor(t)
+	started := make(chan struct{})
+	engine.checker = probeFunc(func(ctx context.Context, _ health.Spec, _ string) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	finished := make(chan error, 1)
+	go func() {
+		_, err := engine.Switch(context.Background(), m.ID, "", "manual", nil)
+		finished <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("manual probe did not start")
+	}
+	stopped := make(chan struct{})
+	go func() { engine.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not cancel manual switch")
+	}
+	if err := <-finished; !errors.Is(err, context.Canceled) {
+		t.Fatalf("switch error: %v", err)
+	}
+	if _, err := engine.Switch(context.Background(), m.ID, "", "manual", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("stopped engine accepted new work: %v", err)
+	}
+}
+
+func TestDNSDriftDoesNotReusePreviousOriginFailureStreak(t *testing.T) {
+	testDatabase(t)
+	m := createTestMonitor(t)
+	DB.Model(&m).Updates(map[string]any{"current_ip": m.OriginalIP, "fail_count": m.Retries, "succ_count": m.SuccessThreshold})
+	dns := &memoryDNS{address: m.BackupIP}
+	engine.dns = dns
+	engine.checker = probeFunc(func(_ context.Context, _ health.Spec, origin string) error {
+		if origin == m.BackupIP {
+			return errors.New("backup unavailable")
+		}
+		return nil
+	})
+	engine.Check(m.ID)
+	got := loadTestMonitor(t, m.ID)
+	if got.CurrentIP != m.BackupIP || got.FailCount != 1 || got.SuccCount != 1 || len(dns.switches) != 0 {
+		t.Fatalf("reused stale streak after DNS drift: %+v", got)
+	}
+}

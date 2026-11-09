@@ -2,12 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -198,5 +200,65 @@ func TestAuthAndStaticRoutes(t *testing.T) {
 		if result := requestAPI(t, router, "GET", path, nil); result.Code != 200 {
 			t.Errorf("%s: HTTP %d", path, result.Code)
 		}
+	}
+}
+
+func TestCloudflareCredentialsAreWriteOnlyAndBlankUpdatesPreserveThem(t *testing.T) {
+	testDatabase(t)
+	AppConfig.Accounts[0].Email = "test@example.com"
+	AppConfig.Accounts[0].ApiKey = "private-api-key"
+	router := NewRouter()
+	for _, path := range []string{"/api/config", "/api/cloudflare-accounts"} {
+		response := requestAPI(t, router, "GET", path, nil)
+		body := response.Body.String()
+		if response.Code != 200 || strings.Contains(body, "test-token") || strings.Contains(body, "private-api-key") || !strings.Contains(body, `"has_api_token":true`) {
+			t.Fatalf("credential disclosure or missing status at %s: %s", path, body)
+		}
+	}
+	response := requestAPI(t, router, "PUT", "/api/cloudflare-accounts/test", map[string]string{"name": "test", "api_token": "", "api_key": ""})
+	if response.Code != 200 {
+		t.Fatalf("blank credential update: %s", response.Body)
+	}
+	account := GetAccountConfig("test")
+	if account.ApiToken != "test-token" || account.ApiKey != "private-api-key" {
+		t.Fatal("blank update erased credentials")
+	}
+	response = requestAPI(t, router, "PUT", "/api/cloudflare-accounts/test", map[string]string{"name": "test", "api_token": "replacement"})
+	if response.Code != 200 || GetAccountConfig("test").ApiToken != "replacement" {
+		t.Fatal("credential rotation failed")
+	}
+}
+
+func TestDNSManagementCannotBypassMonitorOwnership(t *testing.T) {
+	testDatabase(t)
+	m := createTestMonitor(t)
+	DB.Model(&m).Update("cf_record_id", "")
+	var writes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writes.Add(1)
+		}
+		fmt.Fprintf(w, `{"success":true,"result":{"id":"record","name":%q,"type":"A","content":%q}}`, m.CFDomain, m.OriginalIP)
+	}))
+	defer server.Close()
+	mockCloudflare(200, "")
+	cfClient.HTTP, cfClient.BaseURL = server.Client(), server.URL
+	router := NewRouter()
+	for _, method := range []string{"PUT", "DELETE", "POST"} {
+		path := "/api/zones/zone/records"
+		if method != "POST" {
+			path += "/record"
+		}
+		response := requestAPI(t, router, method, path, map[string]any{"name": "WEBSITE.EXAMPLE.", "type": "A", "content": m.BackupIP})
+		if response.Code != http.StatusConflict {
+			t.Errorf("%s: HTTP %d: %s", method, response.Code, response.Body)
+		}
+	}
+	for _, name := range []string{"@", "website"} {
+		response := requestAPI(t, router, "POST", "/api/zones/zone/records", map[string]any{"name": name, "type": "A", "content": m.BackupIP})
+		if response.Code != http.StatusBadRequest { t.Errorf("short DNS name accepted: %q", name) }
+	}
+	if writes.Load() != 0 {
+		t.Fatalf("managed record received %d writes", writes.Load())
 	}
 }

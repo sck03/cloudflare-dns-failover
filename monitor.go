@@ -10,6 +10,7 @@ import (
 
 	"cfguard/internal/failover"
 	"cfguard/internal/health"
+	"cfguard/internal/keylock"
 	"github.com/robfig/cron/v3"
 	"gorm.io/gorm"
 )
@@ -37,22 +38,24 @@ func (cloudflareDNS) Switch(ctx context.Context, m *Monitor, target string) (str
 }
 
 type Engine struct {
-	db      *gorm.DB
-	checker HealthChecker
-	dns     DNSProvider
-	notify  func(string)
-	ctx     context.Context
-	cancel  context.CancelFunc
-	cron    *cron.Cron
-	slots   chan struct{}
-	locks   [64]chan struct{}
-	mu      sync.Mutex
-	entries map[uint][]cron.EntryID
-	plans   map[uint]string
-	synced  map[uint]time.Time
-	started bool
-	stopped bool
-	initial sync.WaitGroup
+	db         *gorm.DB
+	checker    HealthChecker
+	dns        DNSProvider
+	notify     func(string)
+	ctx        context.Context
+	cancel     context.CancelFunc
+	cron       *cron.Cron
+	slots      chan struct{}
+	locks      keylock.Locks
+	mu         sync.Mutex
+	entries    map[uint][]cron.EntryID
+	plans      map[uint]string
+	synced     map[uint]time.Time
+	started    bool
+	stopped    bool
+	stopOnce   sync.Once
+	initial    sync.WaitGroup
+	operations sync.WaitGroup
 }
 
 var engine *Engine
@@ -66,24 +69,34 @@ func NewEngine(db *gorm.DB, checker HealthChecker, dns DNSProvider, concurrency 
 		synced: make(map[uint]time.Time),
 		cron:   cron.New(cron.WithChain(cron.Recover(cron.DefaultLogger), cron.SkipIfStillRunning(cron.DefaultLogger))),
 	}
-	for i := range e.locks {
-		e.locks[i] = make(chan struct{}, 1)
-	}
 	return e
 }
 
 // Lock serializes checks, scheduled/manual switches and configuration mutations.
-// A fixed set of stripes bounds lock memory even when monitors are repeatedly deleted.
+// Unrelated monitors never share a lock; idle locks are reclaimed automatically.
 func (e *Engine) Lock(ctx context.Context, id uint) (func(), error) {
-	lock := e.locks[id%uint(len(e.locks))]
-	select {
-	case lock <- struct{}{}:
-		return func() { <-lock }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-e.ctx.Done():
-		return nil, e.ctx.Err()
+	ctx, cancel := e.operationContext(ctx)
+	defer cancel()
+	return e.locks.Lock(ctx, id)
+}
+
+func (e *Engine) operationContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(e.ctx, cancel)
+	if e.ctx.Err() != nil {
+		cancel()
 	}
+	return ctx, func() { stop(); cancel() }
+}
+
+func (e *Engine) beginOperation() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stopped {
+		return false
+	}
+	e.operations.Add(1)
+	return true
 }
 
 func (e *Engine) Invalidate(id uint) {
@@ -164,16 +177,22 @@ func (e *Engine) Reload() error {
 }
 
 func (e *Engine) Stop() {
-	e.mu.Lock()
-	e.stopped = true
-	e.cancel()
-	done := e.cron.Stop()
-	e.mu.Unlock()
-	<-done.Done()
-	e.initial.Wait()
+	e.stopOnce.Do(func() {
+		e.mu.Lock()
+		e.stopped = true
+		e.cancel()
+		done := e.cron.Stop()
+		e.mu.Unlock()
+		<-done.Done()
+		e.initial.Wait()
+		e.operations.Wait()
+	})
 }
 
 func (e *Engine) takeSlot(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	select {
 	case e.slots <- struct{}{}:
 		return func() { <-e.slots }, nil
@@ -185,13 +204,15 @@ func (e *Engine) takeSlot(ctx context.Context) (func(), error) {
 }
 
 func (e *Engine) Check(id uint) {
-	lock := e.locks[id%uint(len(e.locks))]
-	select {
-	case lock <- struct{}{}:
-		defer func() { <-lock }()
-	default:
+	if !e.beginOperation() {
 		return
 	}
+	defer e.operations.Done()
+	unlock, ok := e.locks.TryLock(id)
+	if !ok {
+		return
+	}
+	defer unlock()
 	release, err := e.takeSlot(e.ctx)
 	if err != nil {
 		return
@@ -233,6 +254,11 @@ func (e *Engine) Check(id uint) {
 		if err != nil {
 			m.LastError = "DNS reconciliation: " + err.Error()
 		} else {
+			if !sameAddress(m.CurrentIP, record.Content) {
+				// Streaks belong to the previously active origin. External DNS
+				// changes must not carry those failures into a different origin.
+				m.FailCount, m.SuccCount = 0, 0
+			}
 			switch {
 			case sameAddress(record.Content, m.OriginalIP):
 				m.CurrentIP = m.OriginalIP
@@ -294,6 +320,12 @@ func (e *Engine) Switch(ctx context.Context, id uint, target, kind string, proxi
 }
 
 func (e *Engine) switchMonitor(ctx context.Context, id uint, target, kind string, proxied *bool, scheduleID uint) (*Monitor, error) {
+	if !e.beginOperation() {
+		return nil, context.Canceled
+	}
+	defer e.operations.Done()
+	ctx, cancel := e.operationContext(ctx)
+	defer cancel()
 	unlock, err := e.Lock(ctx, id)
 	if err != nil {
 		return nil, err

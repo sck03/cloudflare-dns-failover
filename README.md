@@ -40,11 +40,11 @@ docker compose up -d
 
 访问 `http://服务器地址:8099`。通过反向代理提供 HTTPS 后再开放公网管理入口。配置目录和 `instance` 目录必须可写。默认持久化 `instance/cfguard.db`，支持 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。
 
-已有实例请先阅读[升级说明](docs/UPGRADE.md)，尤其是目录挂载、HTTPS 证书校验和首次初始化行为的变化。
+本项目尚未正式部署，当前版本以全新安装为基准，不维护旧配置路径或旧版数据迁移。配置统一使用 `config/config.yaml`；挂载整个配置目录，使 Web 设置能够原子保存。
 
 ## 配置
 
-完整示例见 [config.example.yaml](config.example.yaml)。默认只从 YAML 初始化监控一次；随后由 Web UI 和 SQLite 管理，重启不会覆盖界面修改或重新创建已删除的监控。
+完整示例见 [config.example.yaml](config.example.yaml)。配置只接受一个 YAML 文档；未知字段会在启动时报告，避免拼写错误被忽略。默认只从 YAML 初始化监控一次；随后由 Web UI 和 SQLite 管理，重启不会覆盖界面修改或重新创建已删除的监控。
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -68,6 +68,8 @@ docker compose up -d
 HTTP 检测最多跟随五次同主机重定向，并判断最终响应；跨主机重定向会报错，请直接配置健康检查路径。响应读取限制为 32 KiB。源站防火墙应允许监控程序访问。
 
 同一个 DNS 名称 / 类型只允许一个策略管理，避免策略互相覆盖。有 A 和 AAAA 两种记录时，需要分别配置对应策略。
+
+账号列表和设置接口不返回 Cloudflare Token / API Key 原文，只返回是否已设置；编辑时留空保留已有凭证，填写新值进行替换。通知设置仍仅供已认证管理员读取，请保护管理入口。
 
 ### YAML 首次初始化示例
 
@@ -126,6 +128,5 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o cfguard .
 - [架构、状态模型与扩展边界](docs/ARCHITECTURE.md)
 - [完成进度与验证记录](docs/STATUS.md)
 - [部署、故障排查与 API](docs/OPERATIONS.md)
-- [已有实例升级说明](docs/UPGRADE.md)
 
 后端和前端静态资源嵌入一个程序。资源占用取决于策略数量、超时、通知和数据库规模；项目不再使用未经测量的内存、CPU 或零停机保证。

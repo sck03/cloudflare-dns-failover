@@ -17,7 +17,9 @@ type CloudflareZone = cloudflare.Zone
 type CloudflareRecord = cloudflare.Record
 
 func GetAccountConfig(name string) *AccountConfig {
-	return accountFromConfig(ConfigSnapshot(), name)
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return accountFromConfig(AppConfig, name)
 }
 
 func accountFromConfig(config Config, name string) *AccountConfig {

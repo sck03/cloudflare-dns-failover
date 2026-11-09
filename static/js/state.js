@@ -3,6 +3,7 @@ export const state = {
     currentZoneId: null,
     currentZoneName: null,
     monitorInterval: null,
+    refreshController: null,
     startTime: Date.now(),
     monitorsCache: [],
     editingMonitorId: null,

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { escapeHTML, formatTime, healthLabel, monitorStatus } from '../static/js/format.js';
 import { apiRequest } from '../static/js/api.js';
+import { LatestRequest } from '../static/js/requests.js';
 
 test('unknown, failed and pending DNS states are never labelled healthy', () => {
     for (const status of ['Unknown', 'Error', 'Down', 'Degraded', 'Failover', 'unexpected']) {
@@ -34,13 +35,51 @@ test('API displays the backend failure reason instead of a generic status', asyn
 test('API unwraps auth data and preserves caller cancellation', async () => {
     const original = globalThis.fetch;
     const controller = new AbortController();
+    let requestSignal;
     globalThis.fetch = async (_path, options) => {
-        assert.equal(options.signal, controller.signal);
+        requestSignal = options.signal;
+        assert.equal(options.signal.aborted, false);
         return new Response(JSON.stringify({ code: 200, data: { authenticated: true } }));
     };
     try {
         assert.deepEqual(await apiRequest('/api/auth/check', { signal: controller.signal }), { authenticated: true });
+        controller.abort();
+        assert.equal(requestSignal.aborted, true);
     } finally {
         globalThis.fetch = original;
     }
+});
+
+test('invalid JSON on a successful response is reported, not returned as null', async t => {
+    t.mock.method(globalThis, 'fetch', async () => new Response('<html>proxy error</html>'));
+    await assert.rejects(apiRequest('/api/status'), /JSON/);
+});
+
+test('cancellation while reading JSON remains an abort error', async t => {
+    const controller = new AbortController();
+    t.mock.method(globalThis, 'fetch', async () => ({
+        ok: true, status: 200,
+        json: async () => { controller.abort(); throw new DOMException('Aborted', 'AbortError'); }
+    }));
+    await assert.rejects(apiRequest('/api/status', { signal: controller.signal }), { name: 'AbortError' });
+});
+
+test('late responses cannot overwrite the newest view or a canceled view', async t => {
+    const pending = [];
+    t.mock.method(globalThis, 'fetch', (path, options) => new Promise(resolve => pending.push({ path, signal: options.signal, resolve })));
+    const request = new LatestRequest();
+    const applied = [];
+    const first = request.run('/first', value => applied.push(value));
+    const second = request.run('/second', value => applied.push(value));
+    assert.equal(pending[0].signal.aborted, true);
+    pending[1].resolve(new Response(JSON.stringify('second')));
+    await second;
+    pending[0].resolve(new Response(JSON.stringify('first')));
+    await first;
+    assert.deepEqual(applied, ['second']);
+    const third = request.run('/third', value => applied.push(value));
+    request.cancel();
+    pending[2].resolve(new Response(JSON.stringify('third')));
+    await third;
+    assert.deepEqual(applied, ['second']);
 });

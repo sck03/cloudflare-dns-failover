@@ -3,13 +3,15 @@ package main
 import (
 	"errors"
 	"fmt"
-	"gorm.io/gorm"
 	"net/http"
 	"runtime"
+	"runtime/metrics"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // Configuration mutations are short and infrequent. Serialize them to keep
@@ -31,7 +33,7 @@ func monitorID(w http.ResponseWriter, r *http.Request) (uint, bool) {
 
 func GetMonitors(w http.ResponseWriter, r *http.Request) {
 	monitors := make([]Monitor, 0)
-	if err := DB.Preload("Schedules").Order("id").Find(&monitors).Error; err != nil {
+	if err := DB.WithContext(r.Context()).Preload("Schedules").Order("id").Find(&monitors).Error; err != nil {
 		apiError(w, 500, err)
 		return
 	}
@@ -49,35 +51,38 @@ func setScheduleView(m *Monitor) {
 }
 
 func GetStatus(w http.ResponseWriter, r *http.Request) {
+	db := DB.WithContext(r.Context())
 	monitors := make([]Monitor, 0)
 	history := make([]SwitchEvent, 0)
-	if err := DB.Preload("Schedules").Order("id").Find(&monitors).Error; err != nil {
+	if err := db.Preload("Schedules").Order("id").Find(&monitors).Error; err != nil {
 		apiError(w, 500, err)
 		return
 	}
 	for i := range monitors {
 		setScheduleView(&monitors[i])
 	}
-	if err := DB.Order("timestamp desc").Limit(50).Find(&history).Error; err != nil {
+	if err := db.Order("timestamp desc").Limit(50).Find(&history).Error; err != nil {
 		apiError(w, 500, err)
 		return
 	}
 	// Aggregate in SQLite and report the endpoint that failed, not its replacement.
 	hot := make([]OfflineHotStat, 0)
-	totals := DB.Model(&SwitchEvent{}).
+	totals := db.Model(&SwitchEvent{}).
 		Select("MAX(id) AS last_id, COUNT(*) AS total_count").
 		Where("type = ? AND timestamp > ?", "auto", time.Now().Add(-24*time.Hour)).
 		Group("monitor_id, from_ip, to_backup").Having("COUNT(*) >= 3")
-	if err := DB.Table("(?) AS totals", totals).Joins("JOIN switch_events AS e ON e.id = totals.last_id").
+	if err := db.Table("(?) AS totals", totals).Joins("JOIN switch_events AS e ON e.id = totals.last_id").
 		Select("e.monitor_id, e.name, e.from_ip AS ip, CASE WHEN e.to_backup THEN 'primary' ELSE 'backup' END AS role, totals.total_count AS count, e.timestamp AS last_at").
 		Order("totals.total_count DESC").Limit(10).Scan(&hot).Error; err != nil {
 		apiError(w, 500, err)
 		return
 	}
-	var memory runtime.MemStats
-	runtime.ReadMemStats(&memory)
+	// runtime/metrics avoids ReadMemStats' global stop-the-world pause on every
+	// dashboard refresh, especially when multiple clients are connected.
+	samples := []metrics.Sample{{Name: "/memory/classes/heap/objects:bytes"}}
+	metrics.Read(samples)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"system":   map[string]any{"goroutines": runtime.NumGoroutine(), "mem_alloc": memory.Alloc},
+		"system":   map[string]any{"goroutines": runtime.NumGoroutine(), "mem_alloc": samples[0].Value.Uint64()},
 		"monitors": monitors, "history": history, "offline_hot": hot,
 	})
 }
@@ -257,7 +262,7 @@ func SaveSchedule(w http.ResponseWriter, r *http.Request) {
 	schedules := make([]Schedule, 0, 1)
 	if input.Enabled {
 		schedule := Schedule{Cron: input.Cron, TargetIP: input.TargetIP}
-		if err := validateSchedule(schedule, &monitor); err != nil {
+		if err := validateSchedule(&schedule, &monitor); err != nil {
 			apiError(w, 400, err)
 			return
 		}

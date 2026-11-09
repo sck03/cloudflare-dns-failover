@@ -60,7 +60,7 @@ func SendNotification(message string) {
 	if notifier == nil {
 		return
 	}
-	config := ConfigSnapshot().Notification
+	config := notificationConfig()
 	if !config.DingTalk.Enabled && !config.Telegram.Enabled && !config.Email.Enabled {
 		return
 	}

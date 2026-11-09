@@ -223,8 +223,8 @@ func (m *Monitor) Validate() error {
 	if m.DNSTTL != 0 && m.DNSTTL != 1 && (m.DNSTTL < 60 || m.DNSTTL > 86400) {
 		return errors.New("dns_ttl must be 0 (preserve), 1 (auto) or 60..86400 seconds")
 	}
-	for _, schedule := range m.Schedules {
-		if err := validateSchedule(schedule, m); err != nil {
+	for i := range m.Schedules {
+		if err := validateSchedule(&m.Schedules[i], m); err != nil {
 			return err
 		}
 	}
@@ -248,7 +248,12 @@ func validHostname(name string) bool {
 	return true
 }
 
-func validateSchedule(schedule Schedule, m *Monitor) error {
+func validateSchedule(schedule *Schedule, m *Monitor) error {
+	schedule.Cron = strings.TrimSpace(schedule.Cron)
+	schedule.TargetIP = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(schedule.TargetIP), "."))
+	if ip, err := netip.ParseAddr(schedule.TargetIP); err == nil {
+		schedule.TargetIP = ip.String()
+	}
 	if _, err := cron.ParseStandard(schedule.Cron); err != nil {
 		return fmt.Errorf("invalid schedule: %w", err)
 	}

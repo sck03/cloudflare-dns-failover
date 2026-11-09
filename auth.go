@@ -31,10 +31,10 @@ func validToken(r *http.Request, secret string) bool {
 }
 
 func AuthStatus(w http.ResponseWriter, r *http.Request) {
-	config := ConfigSnapshot()
+	config := serverConfig()
 	writeJSON(w, http.StatusOK, map[string]any{"code": 200, "data": map[string]any{
-		"need_setup": defaultSecret(config.Server.JwtSecret), "auth_enabled": config.Server.AuthEnabled,
-		"authenticated": validToken(r, config.Server.JwtSecret),
+		"need_setup": defaultSecret(config.JwtSecret), "auth_enabled": config.AuthEnabled,
+		"authenticated": validToken(r, config.JwtSecret),
 	}})
 }
 
@@ -46,7 +46,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, err)
 		return
 	}
-	secret := ConfigSnapshot().Server.JwtSecret
+	secret := serverConfig().JwtSecret
 	if defaultSecret(secret) || subtle.ConstantTimeCompare([]byte(input.Token), []byte(secret)) != 1 {
 		apiError(w, http.StatusUnauthorized, errors.New("invalid login password"))
 		return
@@ -66,8 +66,8 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		config := ConfigSnapshot()
-		if config.Server.AuthEnabled && !validToken(r, config.Server.JwtSecret) {
+		config := serverConfig()
+		if config.AuthEnabled && !validToken(r, config.JwtSecret) {
 			apiError(w, http.StatusUnauthorized, errors.New("unauthorized"))
 			return
 		}

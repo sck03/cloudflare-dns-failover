@@ -8,7 +8,10 @@ import (
 
 type ConfigPayload struct {
 	Cloudflare struct {
-		ApiToken string `json:"api_token"`
+		// Credentials are write-only. The UI uses this flag to show whether an
+		// existing token will be preserved when the input is left blank.
+		ApiToken    string `json:"api_token,omitempty"`
+		HasApiToken bool   `json:"has_api_token"`
 	} `json:"cloudflare"`
 	NotificationConfig
 }
@@ -17,7 +20,7 @@ func GetConfig(w http.ResponseWriter, r *http.Request) {
 	config := ConfigSnapshot()
 	payload := ConfigPayload{NotificationConfig: config.Notification}
 	if account := accountFromConfig(config, ""); account != nil {
-		payload.Cloudflare.ApiToken = account.ApiToken
+		payload.Cloudflare.HasApiToken = account.ApiToken != ""
 	}
 	writeJSON(w, http.StatusOK, payload)
 }
@@ -60,8 +63,11 @@ type AccountPayload struct {
 }
 
 type AccountView struct {
-	ID string `json:"id"`
-	AccountPayload
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Email       string `json:"email,omitempty"`
+	HasAPIToken bool   `json:"has_api_token"`
+	HasAPIKey   bool   `json:"has_api_key"`
 }
 
 func GetCloudflareAccounts(w http.ResponseWriter, r *http.Request) {
@@ -69,9 +75,8 @@ func GetCloudflareAccounts(w http.ResponseWriter, r *http.Request) {
 	views := make([]AccountView, 0, len(config.Accounts))
 	activeIndex := 0
 	for i, account := range config.Accounts {
-		views = append(views, AccountView{ID: account.Name, AccountPayload: AccountPayload{
-			Name: account.Name, ApiToken: account.ApiToken, Email: account.Email, ApiKey: account.ApiKey,
-		}})
+		views = append(views, AccountView{ID: account.Name, Name: account.Name,
+			Email: account.Email, HasAPIToken: account.ApiToken != "", HasAPIKey: account.ApiKey != ""})
 		if account.Name == config.ActiveAccount {
 			activeIndex = i
 		}

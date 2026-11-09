@@ -94,7 +94,7 @@ export async function openMonitorModal(monitor) {
         await showMonitorModal({
             name: '',
             account_name: '',
-            zone_id: '',
+            cf_zone_id: '',
             cf_domain: '',
             type: 'https',
             target: '',
@@ -148,10 +148,10 @@ async function showMonitorModal(monitor) {
     }
 
     document.getElementById('monitor-name').value = monitor.name || '';
-    document.getElementById('monitor-zone-id').value = monitor.zone_id || monitor.cf_zone_id || '';
-    document.getElementById('monitor-domain').value = monitor.cf_domain || monitor.domain || '';
+    document.getElementById('monitor-zone-id').value = monitor.cf_zone_id || '';
+    document.getElementById('monitor-domain').value = monitor.cf_domain || '';
     document.getElementById('monitor-dns-type').value = monitor.dns_type || 'A';
-    document.getElementById('monitor-check-type').value = monitor.type || 'ping';
+    document.getElementById('monitor-check-type').value = monitor.type || 'https';
     document.getElementById('monitor-check-target').value = monitor.target || '';
     document.getElementById('monitor-original-ip').value = monitor.original_ip || '';
     document.getElementById('monitor-backup-ip').value = monitor.backup_ip || '';
@@ -343,9 +343,13 @@ export function openAccountModal(account = null) {
     state.editingAccountId = account ? account.id : null;
     document.getElementById('account-modal-title').textContent = account ? '编辑凭证' : '添加凭证';
     document.getElementById('account-name').value = account ? account.name : '';
-    document.getElementById('account-token').value = account ? account.api_token : '';
-    document.getElementById('account-email').value = account ? account.email : '';
-    document.getElementById('account-api-key').value = account ? account.api_key : '';
+    const token = document.getElementById('account-token');
+    token.value = '';
+    token.placeholder = account?.has_api_token ? '已设置，留空保留' : '填写 API Token';
+    document.getElementById('account-email').value = account?.email || '';
+    const apiKey = document.getElementById('account-api-key');
+    apiKey.value = '';
+    apiKey.placeholder = account?.has_api_key ? '已设置，留空保留' : '填写 API Key';
     
     modal.classList.remove('hidden');
 }
@@ -363,7 +367,7 @@ export async function submitAccountForm() {
     const apiKey = document.getElementById('account-api-key').value.trim();
 
     if (!name) throw new Error('请填写凭证名称');
-    if (!token && !apiKey) throw new Error('API Token 和 API Key 至少需要填写一个');
+    if (!state.editingAccountId && !token && !apiKey) throw new Error('API Token 和 API Key 至少需要填写一个');
 
     const payload = { 
         name, 

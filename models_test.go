@@ -32,3 +32,18 @@ func TestMonitorValidation(t *testing.T) {
 		t.Fatal("HTTPS type used the wrong default scheme")
 	}
 }
+
+func TestScheduleNormalizesIPv6AndHostnames(t *testing.T) {
+	for _, tc := range []struct{ target, primary, backup string }{
+		{" 2001:0DB8:0:0:0:0:0:1 ", "2001:db8::1", "2001:db8::2"},
+		{" PRIMARY.EXAMPLE. ", "primary.example", "backup.example"},
+	} {
+		schedule := Schedule{Cron: " 0 */2 * * * ", TargetIP: tc.target}
+		if err := validateSchedule(&schedule, &Monitor{OriginalIP: tc.primary, BackupIP: tc.backup}); err != nil {
+			t.Fatal(err)
+		}
+		if schedule.TargetIP != tc.primary || schedule.Cron != "0 */2 * * *" {
+			t.Fatalf("not normalized: %+v", schedule)
+		}
+	}
+}
