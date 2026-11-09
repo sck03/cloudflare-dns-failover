@@ -102,9 +102,13 @@ func TestTransientPatchFailureRetries(t *testing.T) {
 
 func TestRetryAfterDateAndSecondsUseTheSameBound(t *testing.T) {
 	for _, value := range []string{"999999", time.Now().Add(24 * time.Hour).UTC().Format(http.TimeFormat)} {
-		if got := retryDelay(value); got != time.Hour { t.Errorf("%q: delay %v, want one hour", value, got) }
+		if got := retryDelay(value); got != time.Hour {
+			t.Errorf("%q: delay %v, want one hour", value, got)
+		}
 	}
 	for _, value := range []string{"-1", "invalid", time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat)} {
-		if got := retryDelay(value); got != 0 { t.Errorf("%q: delay %v, want zero", value, got) }
+		if got := retryDelay(value); got != 0 {
+			t.Errorf("%q: delay %v, want zero", value, got)
+		}
 	}
 }

@@ -256,7 +256,9 @@ func TestDNSManagementCannotBypassMonitorOwnership(t *testing.T) {
 	}
 	for _, name := range []string{"@", "website"} {
 		response := requestAPI(t, router, "POST", "/api/zones/zone/records", map[string]any{"name": name, "type": "A", "content": m.BackupIP})
-		if response.Code != http.StatusBadRequest { t.Errorf("short DNS name accepted: %q", name) }
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("short DNS name accepted: %q", name)
+		}
 	}
 	if writes.Load() != 0 {
 		t.Fatalf("managed record received %d writes", writes.Load())
