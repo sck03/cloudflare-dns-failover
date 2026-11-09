@@ -140,14 +140,15 @@ type ScheduleConfig struct {
 }
 
 type SwitchEvent struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	MonitorID uint      `gorm:"index" json:"monitor_id"`
-	Name      string    `json:"name"`
-	FromIP    string    `json:"from_ip"`
-	ToIP      string    `json:"to_ip"`
-	ToBackup  bool      `json:"to_backup"`
-	Type      string    `json:"type"`
-	Timestamp time.Time `gorm:"index" json:"timestamp"`
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	MonitorID     uint      `gorm:"index" json:"monitor_id"`
+	Name          string    `json:"name"`
+	FromIP        string    `json:"from_ip"`
+	ToIP          string    `json:"to_ip"`
+	ToBackup      bool      `json:"to_backup"`
+	FromUnhealthy bool      `json:"from_unhealthy"`
+	Type          string    `json:"type"`
+	Timestamp     time.Time `gorm:"index" json:"timestamp"`
 }
 
 type OfflineHotStat struct {

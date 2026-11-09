@@ -17,7 +17,7 @@ export async function loadDashboardData(signal) {
     }
 }
 
-function renderDashboard(status) {
+export function renderDashboard(status) {
     const monitors = status.monitors || [];
     state.monitorsCache = monitors;
     const healthy = monitors.filter(m => m.status === 'Normal').length;

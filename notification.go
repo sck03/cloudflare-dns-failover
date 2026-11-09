@@ -68,7 +68,7 @@ func SendNotification(message string) {
 	case <-notifier.ctx.Done():
 	case notifier.queue <- notification{message: message, config: config}:
 	default:
-		log.Print("Notification queue full; event remains available in monitor history")
+		log.Print("Notification queue full; notification dropped")
 	}
 }
 
@@ -125,17 +125,19 @@ func postNotification(ctx context.Context, address string, payload any, telegram
 		return fmt.Errorf("notification request failed")
 	}
 	defer resp.Body.Close()
-	var result struct {
-		OK          bool   `json:"ok"`
-		ErrorCode   int    `json:"errcode"`
-		Message     string `json:"errmsg"`
-		Description string `json:"description"`
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (16<<10)+1))
+	if err != nil || len(body) > 16<<10 {
+		return fmt.Errorf("invalid or oversized notification response (HTTP %d)", resp.StatusCode)
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<10)).Decode(&result); err != nil {
+	var result struct {
+		OK        bool `json:"ok"`
+		ErrorCode *int `json:"errcode"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
 		return fmt.Errorf("invalid notification response (HTTP %d)", resp.StatusCode)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 || telegram && !result.OK || !telegram && result.ErrorCode != 0 {
-		return fmt.Errorf("provider rejected notification (HTTP %d, code %d)", resp.StatusCode, result.ErrorCode)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || telegram && !result.OK || !telegram && (result.ErrorCode == nil || *result.ErrorCode != 0) {
+		return fmt.Errorf("provider did not confirm notification (HTTP %d)", resp.StatusCode)
 	}
 	return nil
 }

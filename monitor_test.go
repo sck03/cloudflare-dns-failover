@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -106,7 +107,7 @@ func TestFailoverRetriesWithoutCommittingFailedDNS(t *testing.T) {
 	}
 	var event SwitchEvent
 	DB.First(&event)
-	if event.FromIP != m.OriginalIP || event.ToIP != m.BackupIP || event.Type != "auto" {
+	if event.FromIP != m.OriginalIP || event.ToIP != m.BackupIP || event.Type != "auto" || !event.FromUnhealthy {
 		t.Fatalf("incorrect switch history: %+v", event)
 	}
 }
@@ -146,6 +147,13 @@ func TestBothOriginsDownAndRecoveryFlapping(t *testing.T) {
 	engine.Check(m.ID)
 	if got := loadTestMonitor(t, m.ID); got.CurrentIP != m.OriginalIP || got.Status != "Normal" {
 		t.Fatal("primary recovery failed")
+	}
+	var events []SwitchEvent
+	if err := DB.Order("id").Find(&events).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || !events[0].FromUnhealthy || events[1].FromUnhealthy {
+		t.Fatalf("failover and healthy recovery were not distinguished: %+v", events)
 	}
 }
 
@@ -366,5 +374,51 @@ func TestDNSDriftDoesNotReusePreviousOriginFailureStreak(t *testing.T) {
 	got := loadTestMonitor(t, m.ID)
 	if got.CurrentIP != m.BackupIP || got.FailCount != 1 || got.SuccCount != 1 || len(dns.switches) != 0 {
 		t.Fatalf("reused stale streak after DNS drift: %+v", got)
+	}
+}
+
+type unavailableDNS struct{ memoryDNS }
+
+func (*unavailableDNS) Read(context.Context, *Monitor) (*CloudflareRecord, error) {
+	return nil, errors.New("temporary DNS API failure")
+}
+
+func TestDNSReadFailureClearsHealthStreaks(t *testing.T) {
+	for _, recovery := range []bool{false, true} {
+		t.Run(fmt.Sprintf("recovery=%v", recovery), func(t *testing.T) {
+			testDatabase(t)
+			m := createTestMonitor(t)
+			current := m.OriginalIP
+			if recovery {
+				current = m.BackupIP
+			}
+			if err := DB.Model(&m).Updates(map[string]any{"current_ip": current, "fail_count": m.Retries - 1, "succ_count": m.SuccessThreshold - 1}).Error; err != nil {
+				t.Fatal(err)
+			}
+			dns := &unavailableDNS{memoryDNS: memoryDNS{address: current}}
+			engine.dns = dns
+			engine.checker = probeFunc(func(_ context.Context, _ health.Spec, origin string) error {
+				if recovery && origin == m.OriginalIP {
+					return errors.New("primary unavailable")
+				}
+				return nil
+			})
+			engine.Check(m.ID)
+			got := loadTestMonitor(t, m.ID)
+			if got.FailCount != 0 || got.SuccCount != 0 || got.Status != "Error" || len(dns.switches) != 0 {
+				t.Fatalf("DNS error retained interrupted streaks or switched: %+v", got)
+			}
+			engine.dns = &dns.memoryDNS
+			engine.checker = probeFunc(func(_ context.Context, _ health.Spec, origin string) error {
+				if !recovery && origin == m.OriginalIP {
+					return errors.New("primary unavailable")
+				}
+				return nil
+			})
+			engine.Check(m.ID)
+			if got := loadTestMonitor(t, m.ID); got.CurrentIP != current || len(dns.switches) != 0 {
+				t.Fatalf("interrupted streak caused a premature switch: %+v", got)
+			}
+		})
 	}
 }

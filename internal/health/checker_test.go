@@ -45,6 +45,22 @@ func TestTargetPortValidation(t *testing.T) {
 	}
 }
 
+func TestHealthProbeRequestsUncompressedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if encoding := r.Header.Get("Accept-Encoding"); encoding != "identity" {
+			t.Errorf("health probe requested %q encoding, want identity", encoding)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	host, _, _ := net.SplitHostPort(server.Listener.Addr().String())
+	checker := NewChecker()
+	defer checker.Close()
+	if err := checker.Check(context.Background(), Spec{Type: "http", Target: server.URL, Timeout: time.Second}, host); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHTTPProbesOriginWithWebsiteHost(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.Host, "website.invalid:") {

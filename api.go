@@ -83,7 +83,7 @@ func GetStatus(w http.ResponseWriter, r *http.Request) {
 	hot := make([]OfflineHotStat, 0)
 	totals := db.Model(&SwitchEvent{}).
 		Select("MAX(id) AS last_id, COUNT(*) AS total_count").
-		Where("type = ? AND timestamp > ?", "auto", time.Now().Add(-24*time.Hour)).
+		Where("type = ? AND from_unhealthy = ? AND timestamp > ?", "auto", true, time.Now().Add(-24*time.Hour)).
 		Group("monitor_id, from_ip, to_backup").Having("COUNT(*) >= 3")
 	if err := db.Table("(?) AS totals", totals).Joins("JOIN switch_events AS e ON e.id = totals.last_id").
 		Select("e.monitor_id, e.name, e.from_ip AS ip, CASE WHEN e.to_backup THEN 'primary' ELSE 'backup' END AS role, totals.total_count AS count, e.timestamp AS last_at").

@@ -75,7 +75,8 @@ func TestStatusReportsActualFailedOrigin(t *testing.T) {
 	testDatabase(t)
 	m := createTestMonitor(t)
 	for range 3 {
-		DB.Create(&SwitchEvent{MonitorID: m.ID, Name: m.Name, FromIP: m.OriginalIP, ToIP: m.BackupIP, ToBackup: true, Type: "auto", Timestamp: time.Now()})
+		DB.Create(&SwitchEvent{MonitorID: m.ID, Name: m.Name, FromIP: m.OriginalIP, ToIP: m.BackupIP, ToBackup: true, FromUnhealthy: true, Type: "auto", Timestamp: time.Now()})
+		DB.Create(&SwitchEvent{MonitorID: m.ID, Name: m.Name, FromIP: m.BackupIP, ToIP: m.OriginalIP, Type: "auto", Timestamp: time.Now()})
 	}
 	response := requestAPI(t, NewRouter(), "GET", "/api/status", nil)
 	if response.Code != 200 {
@@ -87,7 +88,7 @@ func TestStatusReportsActualFailedOrigin(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Hot) != 1 || result.Hot[0].IP != m.OriginalIP || result.Hot[0].Role != "primary" || result.Hot[0].LastAt.IsZero() {
+	if len(result.Hot) != 1 || result.Hot[0].Count != 3 || result.Hot[0].IP != m.OriginalIP || result.Hot[0].Role != "primary" || result.Hot[0].LastAt.IsZero() {
 		t.Fatalf("incorrect offline stats: %+v", result.Hot)
 	}
 }

@@ -41,6 +41,7 @@ func NewChecker() *Checker {
 		// Fresh origin connections prevent a pooled connection from hiding a failed
 		// endpoint or being reused for a different origin of the same website.
 		DisableKeepAlives:      true,
+		DisableCompression:     true,
 		TLSHandshakeTimeout:    10 * time.Second,
 		MaxResponseHeaderBytes: 32 << 10,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -93,6 +94,7 @@ func (c *Checker) checkHTTP(ctx context.Context, spec Spec, origin string) error
 	}
 	req.Header.Set("User-Agent", "CFGuard-Monitor")
 	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Accept-Encoding", "identity")
 	transport := c.secure
 	if spec.InsecureSkipVerify {
 		transport = c.insecure
@@ -119,7 +121,7 @@ func (c *Checker) checkHTTP(ctx context.Context, spec Spec, origin string) error
 		spec.ExpectedStatus == 0 && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	// Bound traffic even when a user accidentally selects a download endpoint.
+	// Read a bounded sample without allocating or decompressing an entire body.
 	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 32<<10))
 	return err
 }

@@ -4,6 +4,10 @@ import { escapeHTML, formatTime, healthLabel, monitorStatus } from '../static/js
 import { apiRequest } from '../static/js/api.js';
 import { LatestRequest } from '../static/js/requests.js';
 import { statusRequest } from '../static/js/status.js';
+import { openMonitorModal, hideMonitorModal } from '../static/js/components/modals.js';
+import { state } from '../static/js/state.js';
+import { fetchMonitors } from '../static/js/components/monitors.js';
+import { renderDashboard } from '../static/js/components/dashboard.js';
 
 test('unknown, failed and pending DNS states are never labelled healthy', () => {
     for (const status of ['Unknown', 'Error', 'Down', 'Degraded', 'Failover', 'unexpected']) {
@@ -103,4 +107,60 @@ test('status refresh honors navigation cancellation and supersedes older polls',
     pending[0](new Response(JSON.stringify('old poll')));
     await old;
     assert.deepEqual(applied, ['after edit']);
+});
+
+test('monitor editor ignores old account responses and stays closed after cancellation', async t => {
+    const pending = [];
+    t.mock.method(globalThis, 'fetch', (_path, options) => new Promise(resolve => pending.push({ resolve, signal: options.signal })));
+    const elements = new Map();
+    const previousDocument = globalThis.document;
+    globalThis.document = {
+        getElementById(id) {
+            if (!elements.has(id)) {
+                const classes = new Set(['hidden']);
+                elements.set(id, {
+                    classList: { add: value => classes.add(value), remove: value => classes.delete(value), contains: value => classes.has(value) },
+                    appendChild() {}, value: '', innerHTML: '', textContent: ''
+                });
+            }
+            return elements.get(id);
+        },
+        createElement: () => ({})
+    };
+    t.after(() => { hideMonitorModal(); globalThis.document = previousDocument; });
+    const first = openMonitorModal({ id: 1, name: 'old', account_name: 'test' });
+    const second = openMonitorModal({ id: 2, name: 'new', account_name: 'test' });
+    assert.equal(pending[0].signal.aborted, true);
+    pending[1].resolve(Response.json({ accounts: [{ name: 'test' }] }));
+    await second;
+    pending[0].resolve(Response.json({ accounts: [{ name: 'test' }] }));
+    await first;
+    assert.equal(state.editingMonitorId, 2);
+    assert.equal(elements.get('monitor-name').value, 'new');
+    const third = openMonitorModal({ id: 3, name: 'closed' });
+    hideMonitorModal();
+    pending[2].resolve(Response.json({ accounts: [] }));
+    await third;
+    assert.equal(state.editingMonitorId, null);
+    assert.equal(elements.get('monitor-modal').classList.contains('hidden'), true);
+});
+
+test('mutation refresh updates both views from a single status response', async t => {
+    let calls = 0;
+    t.mock.method(globalThis, 'fetch', async () => {
+        calls++;
+        return Response.json({ monitors: [], history: [], offline_hot: [], system: { goroutines: 12 } });
+    });
+    const elements = new Map();
+    const previousDocument = globalThis.document;
+    globalThis.document = { getElementById(id) {
+        if (!elements.has(id)) elements.set(id, {});
+        return elements.get(id);
+    } };
+    t.after(() => { globalThis.document = previousDocument; });
+    await fetchMonitors(undefined, renderDashboard);
+    assert.equal(calls, 1);
+    assert.match(elements.get('strategy-list').innerHTML, /暂无监控策略/);
+    assert.match(elements.get('dashboard-monitor-list').innerHTML, /暂无监控策略/);
+    assert.equal(elements.get('stat-goroutines').textContent, 12);
 });

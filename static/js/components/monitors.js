@@ -5,12 +5,13 @@ import { escapeHTML, formatTime, healthLabel, monitorStatus } from '../format.js
 import { showNotification } from './notifications.js';
 import { openMonitorModal } from './modals.js';
 
-export async function fetchMonitors(signal) {
+export async function fetchMonitors(signal, onUpdate) {
     try {
         await statusRequest.run('/api/status', status => {
             state.monitorsCache = status.monitors || [];
             renderMonitors(state.monitorsCache);
             renderOfflineHot(status.offline_hot || []);
+            onUpdate?.(status);
         }, signal);
     } catch (error) {
         if (error.name === 'AbortError') return;

@@ -147,9 +147,16 @@ func saveSwitch(db *gorm.DB, m *Monitor, from, kind string) error {
 		if sameAddress(from, m.CurrentIP) {
 			return nil
 		}
+		var fromHealthy *bool
+		if sameAddress(from, m.OriginalIP) {
+			fromHealthy = m.PrimaryHealthy
+		} else if sameAddress(from, m.BackupIP) {
+			fromHealthy = m.BackupHealthy
+		}
 		return tx.Create(&SwitchEvent{
 			MonitorID: m.ID, Name: m.Name, FromIP: from, ToIP: m.CurrentIP,
 			ToBackup: m.CurrentIP == m.BackupIP, Type: kind, Timestamp: m.LastSwitch,
+			FromUnhealthy: kind == "auto" && fromHealthy != nil && !*fromHealthy,
 		}).Error
 	})
 }

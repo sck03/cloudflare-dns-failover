@@ -293,7 +293,11 @@ func (e *Engine) Check(id uint) {
 		}
 		cancel()
 	}
-	if m.LastError == "" {
+	if m.LastError != "" {
+		// Reconciliation failed: do not carry a health streak across an
+		// interval where the active DNS state could not be confirmed.
+		m.FailCount, m.SuccCount = 0, 0
+	} else {
 		state, target := failover.Decide(failover.Policy{
 			Primary: m.OriginalIP, Backup: m.BackupIP,
 			FailureThreshold: m.Retries, RecoveryThreshold: m.SuccessThreshold,
@@ -319,7 +323,7 @@ func (e *Engine) persist(m *Monitor, oldStatus, oldError string) {
 		log.Printf("Save monitor %d state: %v", m.ID, err)
 		return
 	}
-	if (m.Status == "Down" || m.Status == "Error") && (m.Status != oldStatus || m.LastError != oldError) {
+	if e.notify != nil && (m.Status == "Down" || m.Status == "Error") && (m.Status != oldStatus || m.LastError != oldError) {
 		e.notify(fmt.Sprintf("监控 %s: %s %s", m.Name, m.Status, m.LastError))
 	}
 }
@@ -412,7 +416,7 @@ func (e *Engine) applySwitch(ctx context.Context, m *Monitor, target, kind strin
 	e.mu.Lock()
 	e.synced[m.ID] = time.Now()
 	e.mu.Unlock()
-	if !sameAddress(from, target) {
+	if e.notify != nil && !sameAddress(from, target) {
 		e.notify(fmt.Sprintf("%s: %s → %s (%s)", m.Name, from, target, kind))
 	}
 	return nil

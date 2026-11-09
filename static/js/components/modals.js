@@ -4,7 +4,10 @@ import { showNotification } from './notifications.js';
 import { fetchRecords } from './domains.js';
 import { fetchMonitors } from './monitors.js';
 import { loadCloudflareAccounts } from './settings.js';
-import { loadDashboardData } from './dashboard.js';
+import { renderDashboard } from './dashboard.js';
+import { LatestRequest } from '../requests.js';
+
+const monitorRequest = new LatestRequest();
 
 // --- Record Modal --- //
 export function openRecordModal() {
@@ -86,35 +89,19 @@ export async function submitRecordForm() {
 
 // --- Monitor Modal --- //
 export async function openMonitorModal(monitor) {
-    if (monitor) {
-        state.editingMonitorId = monitor.id;
-        await showMonitorModal(monitor);
-    } else {
-        state.editingMonitorId = null;
-        await showMonitorModal({
-            name: '',
-            account_name: '',
-            cf_zone_id: '',
-            cf_domain: '',
-            type: 'https',
-            target: '',
-            original_ip: '',
-            backup_ip: '',
-            retries: 3,
-            success_threshold: 2,
-            interval: 60,
-            timeout: 5,
-			dns_ttl: 60,
-			expected_status: 0,
-			insecure_skip_verify: false,
-            ping_count: 3,
-            original_ip_cdn_enabled: false,
-            backup_ip_cdn_enabled: false
+    hideMonitorModal();
+    const draft = monitor || {};
+    try {
+        await monitorRequest.run('/api/cloudflare-accounts', data => {
+            state.editingMonitorId = monitor?.id ?? null;
+            showMonitorModal(draft, data.accounts || []);
         });
+    } catch (error) {
+        showNotification(`加载账号列表失败：${error.message}`, 'error');
     }
 }
 
-async function showMonitorModal(monitor) {
+function showMonitorModal(monitor, accounts) {
     const modal = document.getElementById('monitor-modal');
     if (!modal) {
         showNotification('缺少监控策略弹窗HTML', 'error');
@@ -127,23 +114,11 @@ async function showMonitorModal(monitor) {
     const accountSelect = document.getElementById('monitor-account');
     if (accountSelect) {
         accountSelect.innerHTML = '<option value="">选择 Cloudflare 账号...</option>';
-        try {
-            const data = await apiRequest('/api/cloudflare-accounts');
-            const accounts = data.accounts || [];
-            if (Array.isArray(accounts)) {
-                accounts.forEach(acc => {
-                    const opt = document.createElement('option');
-                    opt.value = acc.name;
-                    opt.textContent = acc.name;
-                    if (acc.name === monitor.account_name) {
-                        opt.selected = true;
-                    }
-                    accountSelect.appendChild(opt);
-                });
-            }
-        } catch (err) {
-            console.error('Failed to load accounts:', err);
-            showNotification('加载账号列表失败', 'error');
+        for (const account of accounts) {
+            const option = document.createElement('option');
+            option.value = option.textContent = account.name;
+            option.selected = account.name === monitor.account_name;
+            accountSelect.appendChild(option);
         }
     }
 
@@ -171,6 +146,8 @@ async function showMonitorModal(monitor) {
 }
 
 export function hideMonitorModal() {
+    monitorRequest.cancel();
+    state.editingMonitorId = null;
     const modal = document.getElementById('monitor-modal');
     if (modal) modal.classList.add('hidden');
 }
@@ -234,8 +211,7 @@ export async function submitMonitorForm() {
 
     hideMonitorModal();
     showNotification('保存成功', 'success');
-    await fetchMonitors();
-    await loadDashboardData();
+    await fetchMonitors(undefined, renderDashboard);
 }
 
 // --- Restore Modal --- //
@@ -272,8 +248,7 @@ export async function confirmRestore() {
     });
     hideRestoreModal();
     showNotification('Cloudflare 已确认恢复到主地址', 'success');
-    await fetchMonitors();
-    await loadDashboardData();
+    await fetchMonitors(undefined, renderDashboard);
 }
 
 // --- Schedule Modal --- //
