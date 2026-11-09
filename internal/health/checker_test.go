@@ -7,10 +7,43 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRedirectLimitAllowsExactlyFiveHops(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hops, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/"))
+		if hops > 0 {
+			http.Redirect(w, r, fmt.Sprintf("/%d", hops-1), http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	host, _, _ := net.SplitHostPort(server.Listener.Addr().String())
+	checker := NewChecker()
+	defer checker.Close()
+	for _, hops := range []int{5, 6} {
+		err := checker.Check(context.Background(), Spec{Type: "http", Target: fmt.Sprintf("%s/%d", server.URL, hops), Timeout: time.Second}, host)
+		if (err == nil) != (hops == 5) {
+			t.Errorf("%d redirects: %v", hops, err)
+		}
+	}
+}
+
+func TestTargetPortValidation(t *testing.T) {
+	for _, target := range []string{"http://example.com:0", "https://example.com:65536", "http://example.com:", "http://[::1]:"} {
+		if _, err := ParseTarget("http", target); err == nil {
+			t.Errorf("invalid port accepted: %s", target)
+		}
+	}
+	if _, err := ParseTarget("http", "http://[::1]:8080/health"); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestHTTPProbesOriginWithWebsiteHost(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

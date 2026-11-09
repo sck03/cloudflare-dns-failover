@@ -60,8 +60,11 @@ func saveRecord(w http.ResponseWriter, r *http.Request, id string) {
 		apiError(w, 400, err)
 		return
 	}
-	managementMutex.Lock()
-	defer managementMutex.Unlock()
+	releaseManagement, ok := lockManagement(w, r)
+	if !ok {
+		return
+	}
+	defer releaseManagement()
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	auth := credentials(GetActiveAccountConfig())
@@ -103,8 +106,11 @@ func saveRecord(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func DeleteRecord(w http.ResponseWriter, r *http.Request) {
-	managementMutex.Lock()
-	defer managementMutex.Unlock()
+	releaseManagement, ok := lockManagement(w, r)
+	if !ok {
+		return
+	}
+	defer releaseManagement()
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	auth := credentials(GetActiveAccountConfig())

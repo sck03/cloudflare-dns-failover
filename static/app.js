@@ -12,7 +12,7 @@ class DNSManager {
     async start() {
         try {
             const auth = await apiRequest('/api/auth/check');
-            if (auth.auth_enabled && (auth.need_setup || !auth.authenticated)) {
+            if (auth.auth_enabled && !auth.authenticated) {
                 window.location.href = '/login';
                 return;
             }
@@ -24,6 +24,7 @@ class DNSManager {
                 });
             }
             document.addEventListener('viewchanged', async event => {
+                state.refreshController?.abort();
                 const section = event.detail.section;
                 if (section === 'domains') {
                     await this.updateAccountSwitcher();

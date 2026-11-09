@@ -289,6 +289,8 @@ export async function openScheduleSwitchModal(monitorId) {
     if (!modal) return;
 
     document.getElementById('schedule-monitor-name').textContent = monitor.name;
+    const custom = monitor.schedules?.length > 0 && !monitor.schedule_hours;
+    document.getElementById('schedule-custom-warning').classList.toggle('hidden', !custom);
     document.getElementById('schedule-enabled').checked = monitor.schedule_enabled || false;
     document.getElementById('schedule-hours').value = monitor.schedule_hours || '';
     document.getElementById('schedule-ip').value = monitor.schedules && monitor.schedules[0] ? monitor.schedules[0].target_ip : '';
@@ -304,6 +306,9 @@ export function hideScheduleSwitchModal() {
 
 export async function saveScheduleSwitch() {
     if (!state.scheduleMonitorId) return;
+    const current = state.monitorsCache.find(m => m.id == state.scheduleMonitorId);
+    if (current?.schedules?.length && !current.schedule_hours &&
+        !confirm('保存将替换该策略的全部自定义计划，确定继续吗？')) return;
 
     const enabled = document.getElementById('schedule-enabled').checked;
     const hours = document.getElementById('schedule-hours').value;

@@ -8,15 +8,24 @@ import (
 	"runtime/metrics"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"cfguard/internal/keylock"
 	"gorm.io/gorm"
 )
 
 // Configuration mutations are short and infrequent. Serialize them to keep
 // account references and DNS ownership checks consistent across API requests.
-var managementMutex sync.Mutex
+var managementLocks keylock.Locks
+
+func lockManagement(w http.ResponseWriter, r *http.Request) (func(), bool) {
+	release, err := managementLocks.Lock(r.Context(), 0)
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, err)
+		return nil, false
+	}
+	return release, true
+}
 
 func apiError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]any{"error": err.Error()})
@@ -45,8 +54,13 @@ func GetMonitors(w http.ResponseWriter, r *http.Request) {
 
 func setScheduleView(m *Monitor) {
 	m.ScheduleEnabled = len(m.Schedules) > 0
-	if m.ScheduleEnabled {
-		fmt.Sscanf(m.Schedules[0].Cron, "0 */%d * * *", &m.ScheduleHours)
+	m.ScheduleHours = 0
+	if len(m.Schedules) == 1 {
+		var hours int
+		if _, err := fmt.Sscanf(m.Schedules[0].Cron, "0 */%d * * *", &hours); err == nil &&
+			hours >= 1 && hours <= 23 && m.Schedules[0].Cron == fmt.Sprintf("0 */%d * * *", hours) {
+			m.ScheduleHours = hours
+		}
 	}
 }
 
@@ -93,15 +107,18 @@ func CreateMonitor(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, err)
 		return
 	}
-	managementMutex.Lock()
-	defer managementMutex.Unlock()
+	releaseManagement, ok := lockManagement(w, r)
+	if !ok {
+		return
+	}
+	defer releaseManagement()
 	monitor := input.ToMonitor()
 	monitor.Schedules = schedulesFromConfig(input.Schedules)
 	if err := prepareMonitor(&monitor); err != nil {
 		apiError(w, 400, err)
 		return
 	}
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
 		if err := checkDNSConflict(tx, &monitor); err != nil {
 			return err
 		}
@@ -142,16 +159,19 @@ func UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, err)
 		return
 	}
-	managementMutex.Lock()
-	defer managementMutex.Unlock()
 	unlock, err := engine.Lock(r.Context(), id)
 	if err != nil {
 		apiError(w, 503, err)
 		return
 	}
 	defer unlock()
+	releaseManagement, ok := lockManagement(w, r)
+	if !ok {
+		return
+	}
+	defer releaseManagement()
 	var previous Monitor
-	if err := DB.Preload("Schedules").First(&previous, id).Error; err != nil {
+	if err := DB.WithContext(r.Context()).Preload("Schedules").First(&previous, id).Error; err != nil {
 		apiError(w, 404, err)
 		return
 	}
@@ -176,7 +196,7 @@ func UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 	if next.CFRecordID == "" && !identityChanged {
 		next.CFRecordID = previous.CFRecordID
 	}
-	err = DB.Transaction(func(tx *gorm.DB) error {
+	err = DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
 		if err := checkDNSConflict(tx, &next); err != nil {
 			return err
 		}
@@ -211,7 +231,7 @@ func UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 500, err)
 		return
 	}
-	if err := DB.Preload("Schedules").First(&next, id).Error; err != nil {
+	if err := DB.WithContext(r.Context()).Preload("Schedules").First(&next, id).Error; err != nil {
 		apiError(w, 500, err)
 		return
 	}
@@ -246,16 +266,19 @@ func SaveSchedule(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, err)
 		return
 	}
-	managementMutex.Lock()
-	defer managementMutex.Unlock()
 	unlock, err := engine.Lock(r.Context(), id)
 	if err != nil {
 		apiError(w, 503, err)
 		return
 	}
 	defer unlock()
+	releaseManagement, ok := lockManagement(w, r)
+	if !ok {
+		return
+	}
+	defer releaseManagement()
 	var monitor Monitor
-	if err := DB.First(&monitor, id).Error; err != nil {
+	if err := DB.WithContext(r.Context()).First(&monitor, id).Error; err != nil {
 		apiError(w, 404, err)
 		return
 	}
@@ -268,7 +291,7 @@ func SaveSchedule(w http.ResponseWriter, r *http.Request) {
 		}
 		schedules = append(schedules, schedule)
 	}
-	if err := DB.Transaction(func(tx *gorm.DB) error { return replaceSchedules(tx, id, schedules) }); err != nil {
+	if err := DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error { return replaceSchedules(tx, id, schedules) }); err != nil {
 		apiError(w, 500, err)
 		return
 	}
@@ -310,15 +333,18 @@ func DeleteMonitor(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	managementMutex.Lock()
-	defer managementMutex.Unlock()
 	unlock, err := engine.Lock(r.Context(), id)
 	if err != nil {
 		apiError(w, 503, err)
 		return
 	}
 	defer unlock()
-	err = DB.Transaction(func(tx *gorm.DB) error {
+	releaseManagement, ok := lockManagement(w, r)
+	if !ok {
+		return
+	}
+	defer releaseManagement()
+	err = DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("monitor_id = ?", id).Delete(&Schedule{}).Error; err != nil {
 			return err
 		}

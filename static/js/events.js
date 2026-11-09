@@ -32,13 +32,21 @@ export function bindEvents() {
         const element = document.getElementById(id);
         if (element) {
             const { event, handler, preventDefault } = eventMappings[id];
+            let pending = false;
             element.addEventListener(event, async (e) => {
                 if (preventDefault) e.preventDefault();
+                if (pending) return;
+                pending = true;
+                const button = preventDefault ? element.querySelector('[type="submit"]') : element;
+                if (button) button.disabled = true;
                 try {
                     await handler();
                 } catch (error) {
                     console.error(`Event handler for #${id} failed:`, error);
                     showNotification(error.message || '操作失败', 'error');
+                } finally {
+                    pending = false;
+                    if (button) button.disabled = false;
                 }
             });
         }

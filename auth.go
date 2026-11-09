@@ -32,10 +32,10 @@ func validToken(r *http.Request, secret string) bool {
 
 func AuthStatus(w http.ResponseWriter, r *http.Request) {
 	config := serverConfig()
-	writeJSON(w, http.StatusOK, map[string]any{"code": 200, "data": map[string]any{
-		"need_setup": defaultSecret(config.JwtSecret), "auth_enabled": config.AuthEnabled,
+	writeJSON(w, http.StatusOK, map[string]any{
+		"auth_enabled":  config.AuthEnabled,
 		"authenticated": validToken(r, config.JwtSecret),
-	}})
+	})
 }
 
 func Login(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +61,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: "token", Value: signed, MaxAge: 86400, Path: "/",
 		Secure: r.TLS != nil, HttpOnly: true, SameSite: http.SameSiteStrictMode})
-	writeJSON(w, http.StatusOK, map[string]any{"code": 200, "msg": "Login successful", "token": signed})
+	writeJSON(w, http.StatusOK, map[string]any{"token": signed})
 }
 
 func AuthMiddleware(next http.Handler) http.Handler {

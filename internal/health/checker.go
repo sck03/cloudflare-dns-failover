@@ -100,7 +100,7 @@ func (c *Checker) checkHTTP(ctx context.Context, spec Spec, origin string) error
 	client := http.Client{
 		Transport: transport,
 		CheckRedirect: func(next *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
+			if len(via) > 5 {
 				return errors.New("too many health check redirects")
 			}
 			if !strings.EqualFold(next.URL.Hostname(), target.Hostname()) ||
@@ -134,6 +134,14 @@ func ParseTarget(kind, target string) (*url.URL, error) {
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
 		return nil, errors.New("health URL must be HTTP/HTTPS without credentials or a fragment")
+	}
+	if port := u.Port(); port != "" {
+		number, err := strconv.Atoi(port)
+		if err != nil || number < 1 || number > 65535 {
+			return nil, errors.New("health URL port must be between 1 and 65535")
+		}
+	} else if strings.HasSuffix(u.Host, ":") {
+		return nil, errors.New("health URL port cannot be empty")
 	}
 	return u, nil
 }

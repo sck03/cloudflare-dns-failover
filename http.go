@@ -15,8 +15,14 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func decodeJSON(r *http.Request, value any) error {
 	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(value); err != nil {
+	decoder.DisallowUnknownFields()
+	// Decode through the interface pointer so JSON null cannot silently become
+	// a zero-value configuration and erase settings.
+	if err := decoder.Decode(&value); err != nil {
 		return err
+	}
+	if value == nil {
+		return errors.New("request body must be a JSON object")
 	}
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return errors.New("request body must contain exactly one JSON value")

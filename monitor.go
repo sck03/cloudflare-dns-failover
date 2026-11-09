@@ -54,20 +54,29 @@ type Engine struct {
 	started    bool
 	stopped    bool
 	stopOnce   sync.Once
-	initial    sync.WaitGroup
+	queue      []uint
+	pending    map[uint]bool
+	wake       chan struct{}
+	workers    sync.WaitGroup
 	operations sync.WaitGroup
 }
 
 var engine *Engine
 
 func NewEngine(db *gorm.DB, checker HealthChecker, dns DNSProvider, concurrency int, notify func(string)) *Engine {
+	concurrency = max(concurrency, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	e := &Engine{
 		db: db, checker: checker, dns: dns, notify: notify, ctx: ctx, cancel: cancel,
-		slots: make(chan struct{}, max(concurrency, 1)), entries: make(map[uint][]cron.EntryID),
+		slots: make(chan struct{}, concurrency), entries: make(map[uint][]cron.EntryID),
+		pending: make(map[uint]bool), wake: make(chan struct{}, concurrency),
 		plans:  make(map[uint]string),
 		synced: make(map[uint]time.Time),
 		cron:   cron.New(cron.WithChain(cron.Recover(cron.DefaultLogger), cron.SkipIfStillRunning(cron.DefaultLogger))),
+	}
+	for range concurrency {
+		e.workers.Add(1)
+		go e.checkWorker()
 	}
 	return e
 }
@@ -107,7 +116,7 @@ func (e *Engine) Invalidate(id uint) {
 
 func (e *Engine) Reload() error {
 	var monitors []Monitor
-	if err := e.db.Preload("Schedules").Find(&monitors).Error; err != nil {
+	if err := e.db.WithContext(e.ctx).Preload("Schedules").Find(&monitors).Error; err != nil {
 		return err
 	}
 	e.mu.Lock()
@@ -129,7 +138,7 @@ func (e *Engine) Reload() error {
 			e.cron.Remove(entry)
 		}
 		e.plans[id] = plan
-		entry, err := e.cron.AddFunc(fmt.Sprintf("@every %ds", m.Interval), func() { e.Check(id) })
+		entry, err := e.cron.AddFunc(fmt.Sprintf("@every %ds", m.Interval), func() { e.enqueueCheck(id) })
 		if err != nil {
 			return err
 		}
@@ -149,11 +158,7 @@ func (e *Engine) Reload() error {
 			e.entries[id] = append(e.entries[id], entry)
 		}
 		if !existed {
-			e.initial.Add(1)
-			go func() {
-				defer e.initial.Done()
-				e.Check(id)
-			}()
+			e.enqueueCheckLocked(id)
 		}
 	}
 	for id, entries := range e.entries {
@@ -184,8 +189,12 @@ func (e *Engine) Stop() {
 		done := e.cron.Stop()
 		e.mu.Unlock()
 		<-done.Done()
-		e.initial.Wait()
+		e.workers.Wait()
 		e.operations.Wait()
+		e.mu.Lock()
+		e.queue = nil
+		clear(e.pending)
+		e.mu.Unlock()
 	})
 }
 
@@ -219,13 +228,13 @@ func (e *Engine) Check(id uint) {
 	}
 	defer release()
 	var m Monitor
-	if err := e.db.First(&m, id).Error; err != nil {
+	if err := e.db.WithContext(e.ctx).First(&m, id).Error; err != nil {
 		return
 	}
 	oldStatus, oldError := m.Status, m.LastError
 	err = m.Validate()
 	if err == nil {
-		err = checkDNSConflict(e.db, &m)
+		err = checkDNSConflict(e.db.WithContext(e.ctx), &m)
 	}
 	if err != nil {
 		m.LastError, m.Status = err.Error(), "Error"
@@ -337,18 +346,19 @@ func (e *Engine) switchMonitor(ctx context.Context, id uint, target, kind string
 	}
 	defer release()
 	var m Monitor
-	if err := e.db.First(&m, id).Error; err != nil {
+	db := e.db.WithContext(ctx)
+	if err := db.First(&m, id).Error; err != nil {
 		return nil, err
 	}
 	if err := m.Validate(); err != nil {
 		return nil, err
 	}
-	if err := checkDNSConflict(e.db, &m); err != nil {
+	if err := checkDNSConflict(db, &m); err != nil {
 		return nil, err
 	}
 	if scheduleID != 0 {
 		var schedule Schedule
-		if err := e.db.Where("id = ? AND monitor_id = ? AND target_ip = ?", scheduleID, id, target).First(&schedule).Error; err != nil {
+		if err := db.Where("id = ? AND monitor_id = ? AND target_ip = ?", scheduleID, id, target).First(&schedule).Error; err != nil {
 			return nil, fmt.Errorf("schedule was removed or changed: %w", err)
 		}
 	}

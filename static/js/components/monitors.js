@@ -1,15 +1,17 @@
 import { state } from '../state.js';
 import { apiRequest } from '../api.js';
+import { statusRequest } from '../status.js';
 import { escapeHTML, formatTime, healthLabel, monitorStatus } from '../format.js';
 import { showNotification } from './notifications.js';
 import { openMonitorModal } from './modals.js';
 
 export async function fetchMonitors(signal) {
     try {
-        const status = await apiRequest('/api/status', { signal });
-        state.monitorsCache = status.monitors || [];
-        renderMonitors(state.monitorsCache);
-        renderOfflineHot(status.offline_hot || []);
+        await statusRequest.run('/api/status', status => {
+            state.monitorsCache = status.monitors || [];
+            renderMonitors(state.monitorsCache);
+            renderOfflineHot(status.offline_hot || []);
+        }, signal);
     } catch (error) {
         if (error.name === 'AbortError') return;
         showNotification(`获取监控策略失败：${error.message}`, 'error');

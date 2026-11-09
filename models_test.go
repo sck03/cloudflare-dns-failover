@@ -15,6 +15,7 @@ func TestMonitorValidation(t *testing.T) {
 		{"invalid type", func(m *Monitor) { m.Type = "ftp" }},
 		{"invalid target", func(m *Monitor) { m.Target = "https://" }},
 		{"invalid TTL", func(m *Monitor) { m.DNSTTL = 10 }},
+		{"IP as CNAME", func(m *Monitor) { m.DNSType = "CNAME"; m.BackupIP = "backup.example" }},
 		{"invalid schedule", func(m *Monitor) { m.Schedules = []Schedule{{Cron: "invalid", TargetIP: m.BackupIP}} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

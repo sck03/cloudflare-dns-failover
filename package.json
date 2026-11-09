@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:css": "tailwindcss -i assets/tailwind.css -o static/utilities.css --minify",
     "test": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.19"
   }
 }

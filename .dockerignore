@@ -16,3 +16,7 @@ coverage.out
 *.exe
 node_modules/
 package*.json
+.tools/
+_cleanup/
+assets/
+tailwind.config.js

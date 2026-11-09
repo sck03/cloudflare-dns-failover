@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -219,11 +220,14 @@ func (c *Client) Records(ctx context.Context, auth Credentials, zone string, fil
 	if zone == "" {
 		return nil, errors.New("zone ID is required")
 	}
-	if filter == nil {
-		filter = url.Values{}
+	// Own the query before pagination mutates it. Callers may safely reuse one
+	// filter across simultaneous record requests.
+	query := make(url.Values, len(filter)+2)
+	for key, values := range filter {
+		query[key] = slices.Clone(values)
 	}
-	filter.Set("per_page", "100")
-	return list[Record](ctx, c, auth, recordPath(zone, ""), filter)
+	query.Set("per_page", "100")
+	return list[Record](ctx, c, auth, recordPath(zone, ""), query)
 }
 
 func recordPath(zone, id string) string {

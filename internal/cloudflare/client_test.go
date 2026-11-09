@@ -5,10 +5,35 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestRecordFiltersCanBeReusedConcurrently(t *testing.T) {
+	client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("name") != "site.example" || r.URL.Query().Get("per_page") != "100" {
+			t.Error("record filter changed")
+		}
+		fmt.Fprint(w, `{"success":true,"result":[],"result_info":{"total_pages":1}}`)
+	})
+	filter := url.Values{"name": {"site.example"}, "page": {"7"}, "per_page": {"5"}}
+	var group sync.WaitGroup
+	for range 10 {
+		group.Go(func() {
+			if _, err := client.Records(context.Background(), testCredentials, "zone", filter); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	group.Wait()
+	if !reflect.DeepEqual(filter, url.Values{"name": {"site.example"}, "page": {"7"}, "per_page": {"5"}}) {
+		t.Fatalf("caller's query was mutated: %v", filter)
+	}
+}
 
 var testCredentials = Credentials{Token: "test-token"}
 

@@ -12,3 +12,6 @@ dist/
 coverage.out
 *.test
 node_modules/
+# Local verification toolchain; never part of a release.
+.tools/
+_cleanup/

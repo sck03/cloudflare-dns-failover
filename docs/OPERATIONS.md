@@ -9,7 +9,7 @@
 3. **证书与跳转。** 证书错误、跨主机重定向、最终非 2xx 均会显示在主 / 备错误字段。Origin CA / 自签名证书使用专门开关。
 4. **备用健康。** 系统不会主动切到已经检测失败的备用端。主备均失败时保留当前 DNS 并显示 `Down`。
 5. **失败阈值。** 失败必须连续；中间成功会清零。检查 `interval`、`timeout`、`retries` 和队列负载。
-6. **Cloudflare 错误。** 查看 `last_error`，核对 Zone、名称、A/AAAA/CNAME 类型、Record ID、Token 的 Zone Read / DNS Edit 权限。
+6. **Cloudflare 错误。** 查看 `last_error`，核对 Zone、名称、A/AAAA/CNAME 类型、Record ID、Token 的 Zone Read / DNS Edit 权限。管理锁等待期间请求被取消时会终止等待，不再继续修改配置。
 7. **多条记录。** 同名同类型有多条记录时填写确切 ID；其他记录仍可能把客户端送往故障服务器。IPv4、IPv6 都存在时分别配置策略。
 8. **真实 DNS 与客户端。** `current_ip` 是控制面的最近确认值。用权威 DNS 查询和新的客户端连接核对；已经缓存的 DNS、CDN 缓存、长连接不会因为一次 PATCH 立即失效。
 
@@ -34,7 +34,7 @@ DNS 更新后还需考虑旧 TTL、Cloudflare 内部传播、递归解析器 / �
 
 ## HTTP API
 
-所有 `/api` 管理接口需要登录 Cookie；也支持同一 JWT 的 `Authorization: Bearer ...`。登录接口为 `POST /api/auth/login`，请求 `{"token":"登录密码"}`；令牌保存在 HttpOnly、SameSite Cookie 中，并在 JSON 的 `token` 字段返回以兼容 API 客户端。不要把密码放在 URL 参数里。
+所有 `/api` 管理接口需要登录 Cookie；也支持同一 JWT 的 `Authorization: Bearer ...`。登录接口为 `POST /api/auth/login`，请求 `{"token":"登录密码"}`；令牌保存在 HttpOnly、SameSite Cookie 中，并在 JSON 的 `token` 字段返回供 API 客户端使用。`GET /api/auth/check` 直接返回 `{"auth_enabled":true,"authenticated":false}`。密码在配置文件中设置，页面不提供首次设置流程。不要把密码放在 URL 参数里。
 
 反向代理应保留原始 `Host`，例如 Nginx 使用 `proxy_set_header Host $http_host;`。写操作会核对浏览器的 Origin，代理改写 Host 会导致请求被拒绝。
 
@@ -56,7 +56,11 @@ DNS 更新后还需考虑旧 TTL、Cloudflare 内部传播、递归解析器 / �
 
 监控 JSON 使用 `account_name`、`cf_domain`、`cf_zone_id`；对应的 YAML 字段分别是 `account`、`domain`、`zone_id`。其余监控字段参照示例。
 
+结构化请求拒绝未知字段、`null` 和多个 JSON 值；不要直接把包含运行状态字段的 GET 响应回传为 PUT。DNS 编辑器的记录对象允许 Cloudflare 扩展字段，由服务商进一步校验。
+
 `PUT` 中不提供 `schedules` 则保留已有计划；显式传 `"schedules":[]` 则清空。简化计划接口只改计划，不覆盖策略其他字段。手动 / 计划失败会返回非 2xx 和 `{"error":"具体原因"}`。
+
+简化计划接口会替换该策略的全部计划；Web 对自定义或多条计划显示提示并确认替换。仅单条完整匹配 `0 */N * * *` 且 N 为 1–23 时返回非零 `schedule_hours`。
 
 Cloudflare 凭证为只写字段：账号列表返回 `has_api_token` / `has_api_key`，配置接口返回 `cloudflare.has_api_token`。保存时空 Token / API Key 保留当前值；新值替换旧值。通知配置保持管理员可读。DNS 创建、修改、删除接口均保护监控所管理的记录，包括尚未发现或已经失效的 `cf_record_id`。
 

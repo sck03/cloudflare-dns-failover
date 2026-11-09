@@ -4,7 +4,7 @@
 
 用 Go 监控主、备源站，并在故障时更新 Cloudflare DNS。提供 Web 管理、计划切换、多账号、IPv4 / IPv6 / CNAME，以及钉钉、Telegram、邮件通知。
 
-当前工具链为 **Go 1.27.3**；GitHub Actions 版本于 **2026-10-13** 对照官方稳定发行核实，固定到对应提交。项目使用 Go 标准库 HTTP 路由、SQLite 和独立的检测 / 决策 / DNS 模块。
+当前工具链为 **Go 1.27.3**，GitHub Actions 固定到提交。项目使用 Go 标准库 HTTP 路由、SQLite 和独立的检测 / 决策 / DNS 模块。页面样式预编译并嵌入程序，使用系统字体，运行时无需访问外部样式 CDN 或字体服务。
 
 **网站监控应选 HTTP/HTTPS。** Ping 只能证明网络可达，不能发现网站返回 500、502、503 等应用故障。请填写真实源站地址，使用能反映业务状态的健康检查 URL。
 
@@ -49,7 +49,7 @@ docker compose up -d
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `server.port` | `8099` | Web 服务端口 |
-| `server.max_concurrent_checks` | `8` | 同时执行的监控操作上限，每项最多并行探测两个源站 |
+| `server.max_concurrent_checks` | `8` | 周期检测 worker 数及监控操作并发上限，每项最多并行探测两个源站；待执行检查按策略去重 |
 | `database.history_retention_days` | `30` | 切换记录保留天数，启动和每小时清理过期记录 |
 | `type` | `https` | `http`、`https`、`ping`；已有策略不会自动改变类型 |
 | `target` | 必填（HTTP） | 完整健康检查 URL；省略协议时使用 `type`，显式 URL 的协议优先 |
@@ -66,6 +66,8 @@ docker compose up -d
 | `cf_record_id` | 可省略 | 同名同类型多条记录时必须明确填写；单条记录可自动发现或修复失效 ID |
 
 HTTP 检测最多跟随五次同主机重定向，并判断最终响应；跨主机重定向会报错，请直接配置健康检查路径。响应读取限制为 32 KiB。源站防火墙应允许监控程序访问。
+
+HTTP URL 的显式端口必须为 1–65535。CNAME 源站必须使用域名，不能填写 IP。API 的结构化请求拒绝未知字段、`null` 和多个 JSON 值，避免拼写错误或空请求意外覆盖配置。
 
 同一个 DNS 名称 / 类型只允许一个策略管理，避免策略互相覆盖。有 A 和 AAAA 两种记录时，需要分别配置对应策略。
 
@@ -99,7 +101,7 @@ monitors:
 
 示例地址是文档保留地址，部署时必须替换。CNAME 源站域名应直接解析到源站，不能是当前管理的业务域名或另一层 CDN。
 
-Web 界面的简化计划使用 `0 */N * * *`（当地时区整点，每天重新计数）；任意五字段 Cron 可通过 YAML 首次初始化或 API `schedules` 数组配置。目标必须是该策略的主地址或备用地址。
+Web 界面的简化计划使用 `0 */N * * *`（当地时区整点，每天重新计数）；任意五字段 Cron 可通过 YAML 首次初始化或 API `schedules` 数组配置。目标必须是该策略的主地址或备用地址。自定义或多条计划不会显示成单一小时计划；用简化表单替换它们前会要求确认。
 
 ## 编译、测试与发布
 
@@ -109,7 +111,7 @@ GitHub 上的 `Build and publish` 工作流在 `main` 推送、版本标签或�
 - 测试通过后交叉编译 Linux 三种架构和 Windows amd64；可在 Actions 的 `cfguard-binaries` 附件下载程序、示例配置和 SHA256 校验文件。
 - 验证容器启动、自定义端口健康检查、Ping 和正常停机，再推送多架构 GHCR 镜像，提供 `latest`、提交 SHA 和版本标签。测试失败时不进入发布步骤。
 
-Dependabot 每周检查 Go 依赖、GitHub Actions 和 Docker 基础镜像，并创建升级 PR，合并前必须通过 CI。CI 的测试和交叉编译统一读取 `Dockerfile` 中的 Go 构建镜像版本，确保镜像升级 PR 使用新工具链完成漏洞检查；`go.mod` 声明最低支持版本。Go 1.27.3 修复了标准库证书验证漏洞 [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809)。
+Dependabot 每周检查 Go / npm 依赖、GitHub Actions 和 Docker 基础镜像，并创建升级 PR，合并前必须通过 CI。CI 的测试和交叉编译统一读取 `Dockerfile` 中的 Go 构建镜像版本，确保镜像升级 PR 使用新工具链完成漏洞检查；`go.mod` 声明最低支持版本。Go 1.27.3 修复了标准库证书验证漏洞 [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809)。
 
 本地使用 Go 1.27.3：
 
@@ -122,6 +124,8 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o cfguard .
 ```
 
 无配置时会生成 `config/config.yaml` 并退出。检查已启动服务可执行 `./cfguard -healthcheck`，会使用配置中的实际端口。完整 CI 检查见 [scripts/check.sh](scripts/check.sh)，跨平台构建见 [scripts/build.sh](scripts/build.sh)。
+
+修改页面或 JavaScript 中的样式类后，运行 `npm ci && npm run build:css`，将生成的 `static/utilities.css` 一起提交；CI 会重新生成并检查一致性。Node/npm 仅用于开发验证，程序运行和 Go 编译直接使用已提交的样式。完整本地检查需安装 Node LTS 和用于 Go 竞态检测的 C 编译器，再运行 `bash scripts/check.sh`。
 
 ## 架构与审阅
 

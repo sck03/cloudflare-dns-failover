@@ -15,7 +15,7 @@ export async function apiRequest(path, options = {}) {
     }
     signal.throwIfAborted();
 
-    if (response.status === 401) {
+    if (response.status === 401 && path !== '/api/auth/login') {
         window.location.href = '/login';
         throw new Error('未登录或登录已过期');
     }
@@ -25,8 +25,5 @@ export async function apiRequest(path, options = {}) {
         throw new Error(message);
     }
 
-    if (payload && typeof payload === 'object' && 'code' in payload && 'data' in payload) {
-        return payload.data;
-    }
     return payload;
 }

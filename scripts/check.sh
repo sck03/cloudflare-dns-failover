@@ -19,3 +19,5 @@ while IFS= read -r -d '' file; do
   node --check "$file"
 done < <(find static -name '*.js' -print0)
 node --test tests/*.test.mjs
+npm run build:css
+git diff --exit-code -- static/utilities.css

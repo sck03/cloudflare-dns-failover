@@ -3,6 +3,7 @@ import test from 'node:test';
 import { escapeHTML, formatTime, healthLabel, monitorStatus } from '../static/js/format.js';
 import { apiRequest } from '../static/js/api.js';
 import { LatestRequest } from '../static/js/requests.js';
+import { statusRequest } from '../static/js/status.js';
 
 test('unknown, failed and pending DNS states are never labelled healthy', () => {
     for (const status of ['Unknown', 'Error', 'Down', 'Degraded', 'Failover', 'unexpected']) {
@@ -32,14 +33,14 @@ test('API displays the backend failure reason instead of a generic status', asyn
     }
 });
 
-test('API unwraps auth data and preserves caller cancellation', async () => {
+test('API returns auth data and preserves caller cancellation', async () => {
     const original = globalThis.fetch;
     const controller = new AbortController();
     let requestSignal;
     globalThis.fetch = async (_path, options) => {
         requestSignal = options.signal;
         assert.equal(options.signal.aborted, false);
-        return new Response(JSON.stringify({ code: 200, data: { authenticated: true } }));
+        return new Response(JSON.stringify({ authenticated: true }));
     };
     try {
         assert.deepEqual(await apiRequest('/api/auth/check', { signal: controller.signal }), { authenticated: true });
@@ -82,4 +83,24 @@ test('late responses cannot overwrite the newest view or a canceled view', async
     pending[2].resolve(new Response(JSON.stringify('third')));
     await third;
     assert.deepEqual(applied, ['second']);
+});
+
+test('login rejection reports the error without redirecting the login form', async t => {
+    t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ error: 'invalid login password' }), { status: 401 }));
+    await assert.rejects(apiRequest('/api/auth/login'), /invalid login password/);
+});
+
+test('status refresh honors navigation cancellation and supersedes older polls', async t => {
+    const pending = [];
+    t.mock.method(globalThis, 'fetch', () => new Promise(resolve => pending.push(resolve)));
+    const applied = [];
+    const controller = new AbortController();
+    const old = statusRequest.run('/api/status', value => applied.push(value), controller.signal);
+    controller.abort();
+    const fresh = statusRequest.run('/api/status', value => applied.push(value));
+    pending[1](new Response(JSON.stringify('after edit')));
+    await fresh;
+    pending[0](new Response(JSON.stringify('old poll')));
+    await old;
+    assert.deepEqual(applied, ['after edit']);
 });

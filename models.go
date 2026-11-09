@@ -190,7 +190,8 @@ func (m *Monitor) Validate() error {
 			}
 			*endpoint = ip.String()
 		case "CNAME":
-			if !validHostname(*endpoint) || *endpoint == m.CFDomain {
+			_, ipErr := netip.ParseAddr(*endpoint)
+			if !validHostname(*endpoint) || ipErr == nil || *endpoint == m.CFDomain {
 				return errors.New("CNAME origins must be independent hostnames, different from the managed DNS name")
 			}
 		default:

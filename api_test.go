@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,6 +14,49 @@ import (
 	"testing"
 	"time"
 )
+
+func TestCanceledManagementRequestDoesNotMutateConfiguration(t *testing.T) {
+	testDatabase(t)
+	unlock, err := managementLocks.Lock(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest("POST", "/api/config", strings.NewReader(`{}`)).WithContext(ctx)
+	response := httptest.NewRecorder()
+	finished := make(chan struct{})
+	go func() { NewRouter().ServeHTTP(response, req); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("canceled request waited for the management lock")
+	}
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("HTTP %d: %s", response.Code, response.Body)
+	}
+}
+
+func TestScheduleViewOnlyRecognizesOneExactHourlyPlan(t *testing.T) {
+	for _, tc := range []struct {
+		cron  string
+		hours int
+	}{
+		{"0 */2 * * *", 2}, {"0 */2 * * 1", 0}, {"0 */2 * * * trailing", 0}, {"0 8 * * *", 0},
+	} {
+		m := Monitor{Schedules: []Schedule{{Cron: tc.cron}}, ScheduleHours: 5}
+		setScheduleView(&m)
+		if m.ScheduleHours != tc.hours || !m.ScheduleEnabled {
+			t.Fatalf("%q: hours=%d", tc.cron, m.ScheduleHours)
+		}
+	}
+	m := Monitor{Schedules: []Schedule{{Cron: "0 */2 * * *"}, {Cron: "0 */3 * * *"}}}
+	setScheduleView(&m)
+	if m.ScheduleHours != 0 {
+		t.Fatal("multiple plans presented as one simple plan")
+	}
+}
 
 func requestAPI(t *testing.T, router http.Handler, method, path string, payload any) *httptest.ResponseRecorder {
 	t.Helper()

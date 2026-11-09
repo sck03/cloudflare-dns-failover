@@ -31,8 +31,11 @@ func SaveConfigHandler(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, err)
 		return
 	}
-	managementMutex.Lock()
-	defer managementMutex.Unlock()
+	releaseManagement, ok := lockManagement(w, r)
+	if !ok {
+		return
+	}
+	defer releaseManagement()
 	err := UpdateConfig(func(config *Config) error {
 		account := accountFromConfig(*config, "")
 		if account == nil && input.Cloudflare.ApiToken != "" {
@@ -98,8 +101,11 @@ func saveAccount(w http.ResponseWriter, r *http.Request, update bool) {
 		apiError(w, 400, errors.New("a valid account name is required"))
 		return
 	}
-	managementMutex.Lock()
-	defer managementMutex.Unlock()
+	releaseManagement, ok := lockManagement(w, r)
+	if !ok {
+		return
+	}
+	defer releaseManagement()
 	id := r.PathValue("id")
 	if update && id != input.Name {
 		if err := unreferencedAccount(id); err != nil {
@@ -169,8 +175,11 @@ func unreferencedAccount(name string) error {
 }
 
 func DeleteCloudflareAccount(w http.ResponseWriter, r *http.Request) {
-	managementMutex.Lock()
-	defer managementMutex.Unlock()
+	releaseManagement, ok := lockManagement(w, r)
+	if !ok {
+		return
+	}
+	defer releaseManagement()
 	id := r.PathValue("id")
 	if err := unreferencedAccount(id); err != nil {
 		apiError(w, 409, err)
@@ -199,8 +208,11 @@ func DeleteCloudflareAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func ActivateCloudflareAccount(w http.ResponseWriter, r *http.Request) {
-	managementMutex.Lock()
-	defer managementMutex.Unlock()
+	releaseManagement, ok := lockManagement(w, r)
+	if !ok {
+		return
+	}
+	defer releaseManagement()
 	err := UpdateConfig(func(config *Config) error {
 		if accountFromConfig(*config, r.PathValue("id")) == nil {
 			return errors.New("account not found")
