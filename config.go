@@ -73,6 +73,7 @@ type NotificationConfig struct {
 var AppConfig Config
 var LoadedConfigPath string
 var configMutex sync.RWMutex
+var configWriteMutex sync.Mutex
 var ErrConfigCreated = errors.New("configuration created at config/config.yaml; set jwt_secret and Cloudflare credentials before starting")
 
 func ConfigSnapshot() Config {
@@ -106,9 +107,9 @@ func cloneConfig(config Config) Config {
 
 // UpdateConfig publishes a new snapshot only after the atomic disk write succeeds.
 func UpdateConfig(change func(*Config) error) error {
-	configMutex.Lock()
-	defer configMutex.Unlock()
-	next := cloneConfig(AppConfig)
+	configWriteMutex.Lock()
+	defer configWriteMutex.Unlock()
+	next := ConfigSnapshot()
 	if err := change(&next); err != nil {
 		return err
 	}
@@ -118,7 +119,9 @@ func UpdateConfig(change func(*Config) error) error {
 	if err := saveConfig(LoadedConfigPath, next); err != nil {
 		return err
 	}
+	configMutex.Lock()
 	AppConfig = next
+	configMutex.Unlock()
 	return nil
 }
 
@@ -157,6 +160,8 @@ func saveConfig(path string, config Config) error {
 }
 
 func LoadConfig() error {
+	configWriteMutex.Lock()
+	defer configWriteMutex.Unlock()
 	const path = "config/config.yaml"
 	data, err := os.ReadFile(path)
 	if err == nil {

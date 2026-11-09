@@ -51,7 +51,7 @@ DNS 更新后还需考虑旧 TTL、Cloudflare 内部传播、递归解析器 / �
 | `GET /api/zones` | 当前管理账号的 Zone 列表，自动分页 |
 | `GET/POST /api/zones/{zoneId}/records` | DNS 列表 / 创建 |
 | `PUT/DELETE /api/zones/{zoneId}/records/{recordId}` | 修改 / 删除未受监控管理的记录 |
-| `GET/POST /api/config` | 读取 Token 是否已设置及通知设置 / 保存 Token 与通知设置 |
+| `GET/POST /api/config` | 读取 / 保存通知设置（`dingtalk`、`telegram`、`email`） |
 | `/api/cloudflare-accounts` | 账号列表 / 创建；`PUT/DELETE /{id}` 修改 / 删除，`POST /{id}/activate` 激活管理账号 |
 
 监控 JSON 使用 `account_name`、`cf_domain`、`cf_zone_id`；对应的 YAML 字段分别是 `account`、`domain`、`zone_id`。其余监控字段参照示例。
@@ -62,7 +62,7 @@ DNS 更新后还需考虑旧 TTL、Cloudflare 内部传播、递归解析器 / �
 
 简化计划接口会替换该策略的全部计划；Web 对自定义或多条计划显示提示并确认替换。仅单条完整匹配 `0 */N * * *` 且 N 为 1–23 时返回非零 `schedule_hours`。
 
-Cloudflare 凭证为只写字段：账号列表返回 `has_api_token` / `has_api_key`，配置接口返回 `cloudflare.has_api_token`。保存时空 Token / API Key 保留当前值；新值替换旧值。通知配置保持管理员可读。DNS 创建、修改、删除接口均保护监控所管理的记录，包括尚未发现或已经失效的 `cf_record_id`。
+Cloudflare 凭证统一通过 `/api/cloudflare-accounts` 管理；账号列表返回 `has_api_token` / `has_api_key`，不返回凭证原文。保存时空 Token / API Key 保留当前值；新值替换指定账号的旧值。`/api/config` 只接受通知设置，不再接受 `cloudflare` 字段，不会按当前激活账号隐式替换 Token。通知配置保持管理员可读。DNS 创建、修改、删除接口均保护监控所管理的记录，包括尚未发现或已经失效的 `cf_record_id`。
 
 DNS 记录的 `name` 使用完整名称（例如 `api.example.com` 或 `example.com`），不接受 `api`、`@` 等简写，以确保名称校验与监控归属检查一致。
 
@@ -73,6 +73,8 @@ DNS 记录的 `name` 使用完整名称（例如 `api.example.com` 或 `example.
 配置和数据库是持久化数据，不能放到镜像构建上下文或提交到 Git。使用停机备份或 SQLite 的在线备份机制；不要只复制仍在写入的单个 `.db` 文件。
 
 默认事件保留 30 天。通知队列满时会记录日志，避免无限创建工作协程；通知是尽力发送，停机取消未完成通知，不保证投递。监控每次入队读取最新通知配置，已排队事件保留入队时的配置。启用 `server.debug` 可记录 HTTP 方法与路径，默认关闭以减少日志开销。
+
+服务重启后的首次检查会清零停机前的连续失败 / 恢复计数，再从当前检测重新累计。若需要验证阈值，应等待新的完整观测序列；手动 / 计划切换仍会先验证目标健康。运行期间 DNS 写入失败会保留当前计数并重新核对，后续检查可重试。
 
 高频故障榜统计过去 24 小时内至少三次自动故障切出的地址；正常切回主地址不会增加健康备用地址的故障次数。历史事件仍记录所有成功切换，`from_unhealthy` 标识自动切出时确认的故障。通知服务即使返回 HTTP 200，也必须包含明确成功字段；缺失字段、无效 / 超大 JSON 响应会记录发送失败。
 

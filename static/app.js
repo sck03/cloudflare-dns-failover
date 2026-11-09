@@ -25,10 +25,10 @@ class DNSManager {
             }
             document.addEventListener('viewchanged', async event => {
                 state.refreshController?.abort();
+                this.cancelSettings();
                 const section = event.detail.section;
                 if (section === 'domains') {
-                    await this.updateAccountSwitcher();
-                    await this.fetchZones();
+                    await Promise.all([this.loadAccounts(), this.fetchZones()]);
                 } else if (section === 'settings') {
                     await this.loadSettings();
                 } else {
@@ -39,7 +39,7 @@ class DNSManager {
             this.updateTime();
             setInterval(() => { if (!document.hidden) this.updateTime(); }, 1000);
             state.monitorInterval = setInterval(() => this.refreshVisible(), 30000);
-            await Promise.all([this.fetchZones(), this.updateAccountSwitcher(), this.refreshVisible()]);
+            await Promise.all([this.fetchZones(), this.loadAccounts(), this.refreshVisible()]);
         } catch (error) {
             this.showNotification(`初始化失败：${error.message}`, 'error');
         }

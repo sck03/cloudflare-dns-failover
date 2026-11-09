@@ -4,7 +4,8 @@ import { loadDashboardData } from './components/dashboard.js';
 import { fetchZones, viewRecords, hideRecords, fetchRecords, deleteRecord } from './components/domains.js';
 import { fetchMonitors, editMonitor, deleteMonitor } from './components/monitors.js';
 import { openRecordModal, editRecord, openMonitorModal, openAccountModal, openRestoreModal, openScheduleSwitchModal } from './components/modals.js';
-import { loadSettings, activateAccount, switchAccount, updateAccountSwitcher, editAccount as editAccountFromSettings, deleteAccount } from './components/settings.js';
+import { loadSettings, cancelSettings } from './components/settings.js';
+import { activateAccount, loadAccounts, editAccount, deleteAccount } from './components/accounts.js';
 
 export {
     showNotification,
@@ -24,10 +25,11 @@ export {
     openRestoreModal,
     openScheduleSwitchModal,
     loadSettings,
+    cancelSettings,
     activateAccount,
-    switchAccount,
-    updateAccountSwitcher,
-    editAccountFromSettings as editAccount,
+    activateAccount as switchAccount,
+    loadAccounts,
+    editAccount,
     deleteAccount
 };
 

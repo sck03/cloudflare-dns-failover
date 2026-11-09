@@ -283,11 +283,11 @@ func TestStopCancelsInFlightProbes(t *testing.T) {
 	}
 }
 
-func TestLegacyDuplicateMonitorsCannotFightOverDNS(t *testing.T) {
+func TestDuplicateMonitorsCannotFightOverDNS(t *testing.T) {
 	testDatabase(t)
 	m := createTestMonitor(t)
 	duplicate := m
-	duplicate.ID, duplicate.Name = 0, "legacy duplicate"
+	duplicate.ID, duplicate.Name = 0, "duplicate"
 	if err := DB.Create(&duplicate).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -378,6 +378,69 @@ func TestDNSDriftDoesNotReusePreviousOriginFailureStreak(t *testing.T) {
 }
 
 type unavailableDNS struct{ memoryDNS }
+
+func TestFailedRuntimeSaveDoesNotRestorePreRestartStreak(t *testing.T) {
+	testDatabase(t)
+	m := createTestMonitor(t)
+	if err := DB.Model(&m).Updates(map[string]any{"current_ip": m.OriginalIP, "fail_count": m.Retries - 1}).Error; err != nil {
+		t.Fatal(err)
+	}
+	dns := &memoryDNS{address: m.OriginalIP}
+	engine.dns = dns
+	engine.checker = probeFunc(func(_ context.Context, _ health.Spec, origin string) error {
+		if origin == m.OriginalIP {
+			return errors.New("HTTP 503")
+		}
+		return nil
+	})
+	if err := DB.Exec("CREATE TRIGGER reject_runtime BEFORE UPDATE ON monitors BEGIN SELECT RAISE(FAIL, 'simulated write failure'); END").Error; err != nil {
+		t.Fatal(err)
+	}
+	engine.Check(m.ID)
+	if err := DB.Exec("DROP TRIGGER reject_runtime").Error; err != nil {
+		t.Fatal(err)
+	}
+	engine.Check(m.ID)
+	if got := loadTestMonitor(t, m.ID); got.FailCount != 1 || got.CurrentIP != m.OriginalIP || len(dns.switches) != 0 {
+		t.Fatalf("failed save restored old streak: %+v", got)
+	}
+}
+
+func TestRestartDoesNotReusePersistedHealthStreaks(t *testing.T) {
+	for _, recovery := range []bool{false, true} {
+		t.Run(fmt.Sprintf("recovery=%v", recovery), func(t *testing.T) {
+			testDatabase(t)
+			m := createTestMonitor(t)
+			current, threshold, target := m.OriginalIP, m.Retries, m.BackupIP
+			if recovery {
+				current, threshold, target = m.BackupIP, m.SuccessThreshold, m.OriginalIP
+			}
+			if err := DB.Model(&m).Updates(map[string]any{
+				"current_ip": current, "fail_count": m.Retries - 1, "succ_count": m.SuccessThreshold - 1,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			dns := &memoryDNS{address: current}
+			engine.dns = dns
+			engine.checker = probeFunc(func(_ context.Context, _ health.Spec, origin string) error {
+				if !recovery && origin == m.OriginalIP {
+					return errors.New("HTTP 503")
+				}
+				return nil
+			})
+			for i := 1; i < threshold; i++ {
+				engine.Check(m.ID)
+				if got := loadTestMonitor(t, m.ID); got.CurrentIP != current || len(dns.switches) != 0 {
+					t.Fatalf("restart reused stale observations: %+v", got)
+				}
+			}
+			engine.Check(m.ID)
+			if got := loadTestMonitor(t, m.ID); got.CurrentIP != target || len(dns.switches) != 1 {
+				t.Fatalf("fresh observations did not reach threshold: %+v", got)
+			}
+		})
+	}
+}
 
 func (*unavailableDNS) Read(context.Context, *Monitor) (*CloudflareRecord, error) {
 	return nil, errors.New("temporary DNS API failure")

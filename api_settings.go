@@ -6,27 +6,12 @@ import (
 	"strings"
 )
 
-type ConfigPayload struct {
-	Cloudflare struct {
-		// Credentials are write-only. The UI uses this flag to show whether an
-		// existing token will be preserved when the input is left blank.
-		ApiToken    string `json:"api_token,omitempty"`
-		HasApiToken bool   `json:"has_api_token"`
-	} `json:"cloudflare"`
-	NotificationConfig
-}
-
 func GetConfig(w http.ResponseWriter, r *http.Request) {
-	config := ConfigSnapshot()
-	payload := ConfigPayload{NotificationConfig: config.Notification}
-	if account := accountFromConfig(config, ""); account != nil {
-		payload.Cloudflare.HasApiToken = account.ApiToken != ""
-	}
-	writeJSON(w, http.StatusOK, payload)
+	writeJSON(w, http.StatusOK, notificationConfig())
 }
 
 func SaveConfigHandler(w http.ResponseWriter, r *http.Request) {
-	var input ConfigPayload
+	var input NotificationConfig
 	if err := decodeJSON(r, &input); err != nil {
 		apiError(w, 400, err)
 		return
@@ -37,18 +22,7 @@ func SaveConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer releaseManagement()
 	err := UpdateConfig(func(config *Config) error {
-		account := accountFromConfig(*config, "")
-		if account == nil && input.Cloudflare.ApiToken != "" {
-			config.Accounts = append(config.Accounts, AccountConfig{Name: "default", ApiToken: input.Cloudflare.ApiToken})
-			config.ActiveAccount = "default"
-		} else if account != nil && input.Cloudflare.ApiToken != "" {
-			for i := range config.Accounts {
-				if config.Accounts[i].Name == account.Name {
-					config.Accounts[i].ApiToken = input.Cloudflare.ApiToken
-				}
-			}
-		}
-		config.Notification = input.NotificationConfig
+		config.Notification = input
 		return nil
 	})
 	if err != nil {

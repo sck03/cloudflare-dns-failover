@@ -256,7 +256,8 @@ func TestCloudflareCredentialsAreWriteOnlyAndBlankUpdatesPreserveThem(t *testing
 	for _, path := range []string{"/api/config", "/api/cloudflare-accounts"} {
 		response := requestAPI(t, router, "GET", path, nil)
 		body := response.Body.String()
-		if response.Code != 200 || strings.Contains(body, "test-token") || strings.Contains(body, "private-api-key") || !strings.Contains(body, `"has_api_token":true`) {
+		if response.Code != 200 || strings.Contains(body, "test-token") || strings.Contains(body, "private-api-key") ||
+			path == "/api/cloudflare-accounts" && !strings.Contains(body, `"has_api_token":true`) {
 			t.Fatalf("credential disclosure or missing status at %s: %s", path, body)
 		}
 	}
@@ -271,6 +272,21 @@ func TestCloudflareCredentialsAreWriteOnlyAndBlankUpdatesPreserveThem(t *testing
 	response = requestAPI(t, router, "PUT", "/api/cloudflare-accounts/test", map[string]string{"name": "test", "api_token": "replacement"})
 	if response.Code != 200 || GetAccountConfig("test").ApiToken != "replacement" {
 		t.Fatal("credential rotation failed")
+	}
+}
+
+func TestNotificationSettingsCannotChangeCloudflareCredentials(t *testing.T) {
+	testDatabase(t)
+	router := NewRouter()
+	response := requestAPI(t, router, "POST", "/api/config", map[string]any{
+		"cloudflare": map[string]string{"api_token": "wrong-account-token"},
+	})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("ambiguous credential update accepted: %s", response.Body)
+	}
+	response = requestAPI(t, router, "POST", "/api/config", NotificationConfig{})
+	if response.Code != http.StatusOK || GetAccountConfig("test").ApiToken != "test-token" {
+		t.Fatalf("notification save changed account credentials: %s", response.Body)
 	}
 }
 

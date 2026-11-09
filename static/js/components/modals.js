@@ -3,7 +3,7 @@ import { apiRequest } from '../api.js';
 import { showNotification } from './notifications.js';
 import { fetchRecords } from './domains.js';
 import { fetchMonitors } from './monitors.js';
-import { loadCloudflareAccounts } from './settings.js';
+import { refreshAccountViews } from './accounts.js';
 import { renderDashboard } from './dashboard.js';
 import { LatestRequest } from '../requests.js';
 
@@ -372,5 +372,5 @@ export async function submitAccountForm() {
 
     hideAccountModal();
     showNotification('保存成功', 'success');
-    await loadCloudflareAccounts();
+    await refreshAccountViews();
 }

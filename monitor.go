@@ -110,75 +110,18 @@ func (e *Engine) beginOperation() bool {
 
 func (e *Engine) Invalidate(id uint) {
 	e.mu.Lock()
-	delete(e.synced, id)
+	if _, observed := e.synced[id]; observed {
+		e.synced[id] = time.Time{}
+	}
 	e.mu.Unlock()
 }
 
-func (e *Engine) Reload() error {
-	var monitors []Monitor
-	if err := e.db.WithContext(e.ctx).Preload("Schedules").Find(&monitors).Error; err != nil {
-		return err
-	}
+// A failed local commit leaves persisted streaks untrusted, including after a
+// restart. The next check must start a new observation sequence.
+func (e *Engine) forgetObservation(id uint) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.stopped {
-		return context.Canceled
-	}
-	present := make(map[uint]bool, len(monitors))
-	for _, m := range monitors {
-		m.ApplyDefaults()
-		id := m.ID
-		present[id] = true
-		plan := fmt.Sprintf("%d:%v", m.Interval, m.Schedules)
-		if e.plans[id] == plan {
-			continue
-		}
-		_, existed := e.entries[id]
-		for _, entry := range e.entries[id] {
-			e.cron.Remove(entry)
-		}
-		e.plans[id] = plan
-		entry, err := e.cron.AddFunc(fmt.Sprintf("@every %ds", m.Interval), func() { e.enqueueCheck(id) })
-		if err != nil {
-			return err
-		}
-		e.entries[id] = []cron.EntryID{entry}
-		for _, schedule := range m.Schedules {
-			target := schedule.TargetIP
-			scheduleID := schedule.ID
-			entry, err := e.cron.AddFunc(schedule.Cron, func() {
-				if _, err := e.switchMonitor(e.ctx, id, target, "scheduled", nil, scheduleID); err != nil && e.ctx.Err() == nil {
-					log.Printf("Scheduled switch for monitor %d: %v", id, err)
-				}
-			})
-			if err != nil {
-				log.Printf("Invalid existing schedule for monitor %d: %v", id, err)
-				continue
-			}
-			e.entries[id] = append(e.entries[id], entry)
-		}
-		if !existed {
-			e.enqueueCheckLocked(id)
-		}
-	}
-	for id, entries := range e.entries {
-		if !present[id] {
-			for _, entry := range entries {
-				e.cron.Remove(entry)
-			}
-			delete(e.entries, id)
-			delete(e.plans, id)
-			delete(e.synced, id)
-		}
-	}
-	if !e.started {
-		if _, err := e.cron.AddFunc("@hourly", pruneHistory); err != nil {
-			return err
-		}
-		e.cron.Start()
-		e.started = true
-	}
-	return nil
+	delete(e.synced, id)
+	e.mu.Unlock()
 }
 
 func (e *Engine) Stop() {
@@ -255,7 +198,12 @@ func (e *Engine) Check(id uint) {
 	m.LastCheck, m.LastError = time.Now(), ""
 
 	e.mu.Lock()
-	lastSync := e.synced[id]
+	lastSync, observed := e.synced[id]
+	if !observed {
+		// Persisted streaks cannot span a process restart and its observation gap.
+		m.FailCount, m.SuccCount = 0, 0
+		e.synced[id] = time.Time{}
+	}
 	e.mu.Unlock()
 	if m.CurrentIP == "" || time.Since(lastSync) >= 5*time.Minute {
 		ctx, cancel := context.WithTimeout(e.ctx, 20*time.Second)
@@ -319,7 +267,7 @@ func (e *Engine) Check(id uint) {
 
 func (e *Engine) persist(m *Monitor, oldStatus, oldError string) {
 	if err := saveRuntime(e.db, m); err != nil {
-		e.Invalidate(m.ID)
+		e.forgetObservation(m.ID)
 		log.Printf("Save monitor %d state: %v", m.ID, err)
 		return
 	}
@@ -409,7 +357,7 @@ func (e *Engine) applySwitch(ctx context.Context, m *Monitor, target, kind strin
 	}
 	next.Status = monitorStatus(&next)
 	if err := saveSwitch(e.db, &next, from, kind); err != nil {
-		e.Invalidate(m.ID)
+		e.forgetObservation(m.ID)
 		return fmt.Errorf("DNS changed but local state could not be saved; reconciliation required: %w", err)
 	}
 	*m = next
