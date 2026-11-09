@@ -111,7 +111,7 @@ GitHub 上的 `Build and publish` 工作流在 `main` 推送、版本标签或�
 - 测试通过后交叉编译 Linux 三种架构和 Windows amd64；可在 Actions 的 `cfguard-binaries` 附件下载程序、示例配置和 SHA256 校验文件。
 - 验证容器启动、自定义端口健康检查、Ping 和正常停机，再推送多架构 GHCR 镜像，提供 `latest`、提交 SHA 和版本标签。测试失败时不进入发布步骤。
 
-Dependabot 每周检查 Go / npm 依赖、GitHub Actions 和 Docker 基础镜像，并创建升级 PR，合并前必须通过 CI。CI 的测试和交叉编译统一读取 `Dockerfile` 中的 Go 构建镜像版本，确保镜像升级 PR 使用新工具链完成漏洞检查；`go.mod` 声明最低支持版本。Go 1.27.3 修复了标准库证书验证漏洞 [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809)。
+依赖不自动创建升级 PR；需要升级时由维护者手动修改并通过完整 CI。CI 的测试和交叉编译统一读取 `Dockerfile` 中的 Go 构建镜像版本，确保工具链升级完成漏洞检查；`go.mod` 声明最低支持版本。Go 1.27.3 修复了标准库证书验证漏洞 [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809)。
 
 本地使用 Go 1.27.3：
 
