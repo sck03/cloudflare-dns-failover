@@ -78,7 +78,7 @@ func run() error {
 	if err := SeedMonitors(); err != nil {
 		return err
 	}
-	pruneHistory()
+	pruneHistory(DB)
 	config := ConfigSnapshot()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

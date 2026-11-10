@@ -4,6 +4,7 @@ import { statusRequest } from '../status.js';
 import { escapeHTML, formatTime, healthLabel, monitorStatus } from '../format.js';
 import { showNotification } from './notifications.js';
 import { openMonitorModal } from './modals.js';
+import { renderDashboard } from './dashboard.js';
 
 export async function fetchMonitors(signal, onUpdate) {
     try {
@@ -24,13 +25,17 @@ export function editMonitor(monitorId) {
     if (monitor) openMonitorModal(monitor);
 }
 
+export function refreshMonitorViews() {
+    return fetchMonitors(undefined, renderDashboard);
+}
+
 export async function deleteMonitor(monitorId) {
     const monitor = state.monitorsCache.find(m => m.id == monitorId);
     if (!confirm(`确定删除监控策略「${monitor?.name || monitorId}」吗？`)) return;
     try {
         await apiRequest(`/api/monitors/${monitorId}`, { method: 'DELETE' });
         showNotification('删除成功', 'success');
-        await fetchMonitors();
+        await refreshMonitorViews();
     } catch (error) {
         showNotification(error.message, 'error');
     }
@@ -86,7 +91,7 @@ function renderMonitors(monitors) {
             <div class="flex flex-wrap items-center gap-2 pt-3 border-t border-gray-200">
                 <button class="btn-secondary text-sm" onclick="dnsManager.editMonitor(${id})">编辑</button>
                 <button class="btn-secondary text-sm" onclick="dnsManager.openScheduleSwitchModal(${id})">定时切换</button>
-                ${monitor.current_ip !== monitor.original_ip ? `<button class="btn-secondary text-sm" onclick="dnsManager.openRestoreModal(${id})">恢复主地址</button>` : ''}
+                ${monitor.current_ip !== monitor.original_ip || (monitor.preferred_ip || monitor.original_ip) !== monitor.original_ip ? `<button class="btn-secondary text-sm" onclick="dnsManager.openRestoreModal(${id})">恢复主地址</button>` : ''}
                 <button class="text-sm text-red-600 ml-auto" onclick="dnsManager.deleteMonitor(${id})">删除</button>
             </div>
         </div>`;

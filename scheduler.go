@@ -2,12 +2,22 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"runtime/debug"
+	"slices"
+	"time"
 
 	"github.com/robfig/cron/v3"
 )
+
+// Periodic checks and switch schedules have independent lifetimes. Editing one
+// must not postpone the other; the plan owns both registrations and their inputs.
+type monitorPlan struct {
+	interval  int
+	check     cron.EntryID
+	schedules []Schedule
+	switches  []cron.EntryID
+}
 
 func (e *Engine) Reload() error {
 	var monitors []Monitor
@@ -24,50 +34,51 @@ func (e *Engine) Reload() error {
 		m.ApplyDefaults()
 		id := m.ID
 		present[id] = true
-		plan := fmt.Sprintf("%d:%v", m.Interval, m.Schedules)
-		if e.plans[id] == plan {
-			continue
+		plan, existed := e.plans[id]
+		if !existed {
+			plan = &monitorPlan{}
+			e.plans[id] = plan
 		}
-		_, existed := e.entries[id]
-		for _, entry := range e.entries[id] {
-			e.cron.Remove(entry)
+		if plan.interval != m.Interval {
+			entry := e.cron.Schedule(cron.Every(time.Duration(m.Interval)*time.Second), cron.FuncJob(func() { e.enqueueCheck(id) }))
+			e.cron.Remove(plan.check)
+			plan.check, plan.interval = entry, m.Interval
 		}
-		e.plans[id] = plan
-		entry, err := e.cron.AddFunc(fmt.Sprintf("@every %ds", m.Interval), func() { e.enqueueCheck(id) })
-		if err != nil {
-			return err
-		}
-		e.entries[id] = []cron.EntryID{entry}
-		for _, schedule := range m.Schedules {
-			target := schedule.TargetIP
-			scheduleID := schedule.ID
-			entry, err := e.cron.AddFunc(schedule.Cron, func() {
-				if _, err := e.switchMonitor(e.ctx, id, target, "scheduled", nil, scheduleID); err != nil && e.ctx.Err() == nil {
-					log.Printf("Scheduled switch for monitor %d: %v", id, err)
-				}
-			})
-			if err != nil {
-				log.Printf("Invalid existing schedule for monitor %d: %v", id, err)
-				continue
+		if !slices.Equal(plan.schedules, m.Schedules) {
+			for _, entry := range plan.switches {
+				e.cron.Remove(entry)
 			}
-			e.entries[id] = append(e.entries[id], entry)
+			plan.switches = nil
+			for _, schedule := range m.Schedules {
+				entry, err := e.cron.AddFunc(schedule.Cron, func() {
+					if _, err := e.switchMonitor(e.ctx, id, schedule.TargetIP, "scheduled", nil, schedule.ID); err != nil && e.ctx.Err() == nil {
+						log.Printf("Scheduled switch for monitor %d: %v", id, err)
+					}
+				})
+				if err != nil {
+					log.Printf("Invalid existing schedule for monitor %d: %v", id, err)
+					continue
+				}
+				plan.switches = append(plan.switches, entry)
+			}
+			plan.schedules = m.Schedules
 		}
 		if !existed {
 			e.enqueueCheckLocked(id)
 		}
 	}
-	for id, entries := range e.entries {
+	for id, plan := range e.plans {
 		if !present[id] {
-			for _, entry := range entries {
+			e.cron.Remove(plan.check)
+			for _, entry := range plan.switches {
 				e.cron.Remove(entry)
 			}
-			delete(e.entries, id)
 			delete(e.plans, id)
 			delete(e.synced, id)
 		}
 	}
 	if !e.started {
-		if _, err := e.cron.AddFunc("@hourly", pruneHistory); err != nil {
+		if _, err := e.cron.AddFunc("@hourly", func() { pruneHistory(e.db.WithContext(e.ctx)) }); err != nil {
 			return err
 		}
 		e.cron.Start()

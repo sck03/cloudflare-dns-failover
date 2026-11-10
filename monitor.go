@@ -48,8 +48,7 @@ type Engine struct {
 	slots      chan struct{}
 	locks      keylock.Locks
 	mu         sync.Mutex
-	entries    map[uint][]cron.EntryID
-	plans      map[uint]string
+	plans      map[uint]*monitorPlan
 	synced     map[uint]time.Time
 	started    bool
 	stopped    bool
@@ -68,11 +67,12 @@ func NewEngine(db *gorm.DB, checker HealthChecker, dns DNSProvider, concurrency 
 	ctx, cancel := context.WithCancel(context.Background())
 	e := &Engine{
 		db: db, checker: checker, dns: dns, notify: notify, ctx: ctx, cancel: cancel,
-		slots: make(chan struct{}, concurrency), entries: make(map[uint][]cron.EntryID),
+		slots:   make(chan struct{}, concurrency),
 		pending: make(map[uint]bool), wake: make(chan struct{}, concurrency),
-		plans:  make(map[uint]string),
+		plans:  make(map[uint]*monitorPlan),
 		synced: make(map[uint]time.Time),
-		cron:   cron.New(cron.WithChain(cron.Recover(cron.DefaultLogger), cron.SkipIfStillRunning(cron.DefaultLogger))),
+		// Recovery must run inside the overlap guard so a panic releases its token.
+		cron: cron.New(cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger), cron.Recover(cron.DefaultLogger))),
 	}
 	for range concurrency {
 		e.workers.Add(1)
@@ -266,7 +266,7 @@ func (e *Engine) Check(id uint) {
 }
 
 func (e *Engine) persist(m *Monitor, oldStatus, oldError string) {
-	if err := saveRuntime(e.db, m); err != nil {
+	if err := saveRuntime(e.db.WithContext(e.ctx), m); err != nil {
 		e.forgetObservation(m.ID)
 		log.Printf("Save monitor %d state: %v", m.ID, err)
 		return
@@ -356,7 +356,11 @@ func (e *Engine) applySwitch(ctx context.Context, m *Monitor, target, kind strin
 		next.LastSwitch = time.Now()
 	}
 	next.Status = monitorStatus(&next)
-	if err := saveSwitch(e.db, &next, from, kind); err != nil {
+	// Preserve a confirmed remote write even if the caller disconnected, but
+	// bound the local commit (including connection-pool waits) during shutdown.
+	commitCtx, commitCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer commitCancel()
+	if err := saveSwitch(e.db.WithContext(commitCtx), &next, from, kind); err != nil {
 		e.forgetObservation(m.ID)
 		return fmt.Errorf("DNS changed but local state could not be saved; reconciliation required: %w", err)
 	}

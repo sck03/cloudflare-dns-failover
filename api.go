@@ -192,10 +192,7 @@ func UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 	}
 	next.AccountName = account.Name
 	identityChanged := next.AccountName != previous.AccountName || next.CFZoneID != previous.CFZoneID ||
-		next.CFDomain != previous.CFDomain || next.DNSType != previous.DNSType
-	if next.CFRecordID == "" && !identityChanged {
-		next.CFRecordID = previous.CFRecordID
-	}
+		next.CFDomain != previous.CFDomain || next.DNSType != previous.DNSType || next.CFRecordID != previous.CFRecordID
 	err = DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
 		if err := checkDNSConflict(tx, &next); err != nil {
 			return err

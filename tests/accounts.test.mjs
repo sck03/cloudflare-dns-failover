@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { loadAccounts, editAccount, deleteAccount, activateAccount, refreshAccountViews } from '../static/js/components/accounts.js';
-import { submitAccountForm, openAccountModal, hideAccountModal, editRecord, hideRecordModal, submitRecordForm } from '../static/js/components/modals.js';
+import { submitAccountForm, openAccountModal, hideAccountModal, editRecord, hideRecordModal, submitRecordForm,
+    openMonitorModal, hideMonitorModal, submitMonitorForm } from '../static/js/components/modals.js';
 import { loadSettings, saveSettings, cancelSettings } from '../static/js/components/settings.js';
 import { viewRecords } from '../static/js/components/domains.js';
 import { state } from '../static/js/state.js';
@@ -172,4 +173,37 @@ test('an older DNS save preserves the new editor and does not fetch the new zone
     assert.equal(element('record-modal').classList.contains('hidden'), false);
     assert.equal(element('record-name').value, 'two.example');
     hideRecordModal();
+});
+
+test('monitor editor preserves, replaces and clears the exact DNS record ID', async t => {
+    const element = mockDocument(t);
+    const saved = [];
+    let refreshes = 0;
+    t.mock.method(globalThis, 'fetch', async (path, options) => {
+        if (options.method === 'PUT') {
+            saved.push(JSON.parse(options.body));
+            return Response.json({});
+        }
+        if (path === '/api/status') {
+            refreshes++;
+            return Response.json({ monitors: [], history: [] });
+        }
+        return Response.json({ accounts: [{ name: 'test' }] });
+    });
+    const monitor = { id: 1, name: 'website', account_name: 'test', cf_zone_id: 'zone',
+        cf_domain: 'website.example', cf_record_id: 'original', type: 'https',
+        target: 'https://website.example/health', original_ip: '192.0.2.1', backup_ip: '192.0.2.2' };
+    for (const recordID of ['original', 'replacement', '']) {
+        await openMonitorModal(monitor);
+        assert.equal(element('monitor-record-id').value, 'original');
+        element('monitor-account').value = 'test';
+        element('monitor-record-id').value = recordID;
+        await submitMonitorForm();
+        assert.equal(saved.at(-1).cf_record_id, recordID);
+    }
+    assert.equal(refreshes, 3);
+    assert.equal(element('stat-total').textContent, 0);
+    await openMonitorModal();
+    assert.equal(element('monitor-record-id').value, '');
+    hideMonitorModal();
 });

@@ -6,8 +6,7 @@ import { LatestRequest } from '../static/js/requests.js';
 import { statusRequest } from '../static/js/status.js';
 import { openMonitorModal, hideMonitorModal } from '../static/js/components/modals.js';
 import { state } from '../static/js/state.js';
-import { fetchMonitors } from '../static/js/components/monitors.js';
-import { renderDashboard } from '../static/js/components/dashboard.js';
+import { fetchMonitors, refreshMonitorViews } from '../static/js/components/monitors.js';
 
 test('unknown, failed and pending DNS states are never labelled healthy', () => {
     for (const status of ['Unknown', 'Error', 'Down', 'Degraded', 'Failover', 'unexpected']) {
@@ -158,9 +157,27 @@ test('mutation refresh updates both views from a single status response', async 
         return elements.get(id);
     } };
     t.after(() => { globalThis.document = previousDocument; });
-    await fetchMonitors(undefined, renderDashboard);
+    await refreshMonitorViews();
     assert.equal(calls, 1);
     assert.match(elements.get('strategy-list').innerHTML, /暂无监控策略/);
     assert.match(elements.get('dashboard-monitor-list').innerHTML, /暂无监控策略/);
     assert.equal(elements.get('stat-goroutines').textContent, 12);
+});
+
+test('restore remains available when primary is active but backup is preferred', async t => {
+    const elements = new Map();
+    const previousDocument = globalThis.document;
+    globalThis.document = { getElementById(id) {
+        if (!elements.has(id)) elements.set(id, {});
+        return elements.get(id);
+    } };
+    t.after(() => { globalThis.document = previousDocument; });
+    const monitor = { id: 1, type: 'https', original_ip: '192.0.2.1', backup_ip: '192.0.2.2',
+        current_ip: '192.0.2.1', preferred_ip: '192.0.2.2', status: 'Failover' };
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ monitors: [monitor] }));
+    await fetchMonitors();
+    assert.match(elements.get('strategy-list').innerHTML, /openRestoreModal\(1\)/);
+    monitor.preferred_ip = monitor.original_ip;
+    await fetchMonitors();
+    assert.doesNotMatch(elements.get('strategy-list').innerHTML, /openRestoreModal/);
 });

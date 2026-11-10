@@ -244,13 +244,13 @@ func TestSchedulerReloadDoesNotPostponeExistingChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine.mu.Lock()
-	entry := engine.entries[m.ID][0]
+	entry := engine.plans[m.ID].check
 	engine.mu.Unlock()
 	if err := engine.Reload(); err != nil {
 		t.Fatal(err)
 	}
 	engine.mu.Lock()
-	unchanged := engine.entries[m.ID][0] == entry
+	unchanged := engine.plans[m.ID].check == entry
 	engine.mu.Unlock()
 	if !unchanged {
 		t.Fatal("unrelated reload restarted the monitoring interval")
@@ -483,5 +483,95 @@ func TestDNSReadFailureClearsHealthStreaks(t *testing.T) {
 				t.Fatalf("interrupted streak caused a premature switch: %+v", got)
 			}
 		})
+	}
+}
+
+func TestCanceledRuntimeSaveDoesNotWaitForConnection(t *testing.T) {
+	testDatabase(t)
+	m := createTestMonitor(t)
+	pool, err := DB.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pool.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	engine.cancel()
+	done := make(chan struct{})
+	go func() {
+		engine.persist(&m, m.Status, m.LastError)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		conn.Close()
+		<-done
+		t.Fatal("canceled engine kept waiting for a database connection")
+	}
+}
+
+type switchDNSFunc struct {
+	stubDNS
+	switchFn func(context.Context, *Monitor, string) (string, error)
+}
+
+func (d switchDNSFunc) Switch(ctx context.Context, m *Monitor, target string) (string, error) {
+	return d.switchFn(ctx, m, target)
+}
+
+func TestConfirmedSwitchIsSavedAfterRequestCancellation(t *testing.T) {
+	testDatabase(t)
+	m := createTestMonitor(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	engine.dns = switchDNSFunc{switchFn: func(context.Context, *Monitor, string) (string, error) {
+		cancel() // The provider confirmed the write as the caller disconnected.
+		return m.OriginalIP, nil
+	}}
+	if _, err := engine.Switch(ctx, m.ID, m.BackupIP, "scheduled", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadTestMonitor(t, m.ID); got.CurrentIP != m.BackupIP {
+		t.Fatalf("confirmed DNS state was lost: %+v", got)
+	}
+	var count int64
+	if err := DB.Model(&SwitchEvent{}).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("confirmed switch event was lost: count=%d, err=%v", count, err)
+	}
+}
+
+func TestSwitchCommitDoesNotWaitForeverForConnection(t *testing.T) {
+	testDatabase(t)
+	m := createTestMonitor(t)
+	engine.synced[m.ID] = time.Now()
+	pool, err := DB.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pool.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	done := make(chan error, 1)
+	go func() { done <- engine.applySwitch(context.Background(), &m, m.BackupIP, "scheduled") }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected a bounded commit deadline, got %v", err)
+		}
+	case <-time.After(7 * time.Second):
+		conn.Close()
+		<-done
+		t.Fatal("confirmed switch waited indefinitely for a database connection")
+	}
+	engine.mu.Lock()
+	_, observed := engine.synced[m.ID]
+	engine.mu.Unlock()
+	if observed {
+		t.Fatal("failed local commit did not require reconciliation")
 	}
 }

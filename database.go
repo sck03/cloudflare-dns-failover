@@ -188,9 +188,9 @@ func saveSwitch(db *gorm.DB, m *Monitor, from, kind string) error {
 	})
 }
 
-func pruneHistory() {
+func pruneHistory(db *gorm.DB) {
 	cutoff := time.Now().AddDate(0, 0, -ConfigSnapshot().Database.HistoryRetentionDays)
-	if err := DB.Where("timestamp < ?", cutoff).Delete(&SwitchEvent{}).Error; err != nil {
+	if err := db.Where("timestamp < ?", cutoff).Delete(&SwitchEvent{}).Error; err != nil {
 		log.Printf("Prune switch history: %v", err)
 	}
 }

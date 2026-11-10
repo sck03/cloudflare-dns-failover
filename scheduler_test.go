@@ -4,11 +4,121 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"cfguard/internal/health"
+	"github.com/robfig/cron/v3"
 )
+
+func TestScheduleChangesKeepPeriodicDeadline(t *testing.T) {
+	testDatabase(t)
+	m := createTestMonitor(t)
+	if err := engine.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	engine.mu.Lock()
+	check := engine.plans[m.ID].check
+	engine.mu.Unlock()
+	before := engine.cron.Entry(check).Next
+	schedule := Schedule{MonitorID: m.ID, Cron: "0 8 * * *", TargetIP: m.BackupIP}
+	if err := DB.Create(&schedule).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, remove := range []bool{false, true} {
+		if remove {
+			if err := DB.Delete(&schedule).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := engine.Reload(); err != nil {
+			t.Fatal(err)
+		}
+		if got := engine.cron.Entry(check); got.ID != check || !got.Next.Equal(before) {
+			t.Fatalf("editing a switch schedule reset the periodic check: before=%v after=%+v", before, got)
+		}
+	}
+}
+
+func TestCronPanicDoesNotDisableFutureRuns(t *testing.T) {
+	testDatabase(t)
+	var calls int
+	id, err := engine.cron.AddFunc("@hourly", func() {
+		calls++
+		if calls == 1 {
+			panic("simulated job failure")
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := engine.cron.Entry(id).WrappedJob
+	job.Run()
+	job.Run()
+	if calls != 2 {
+		t.Fatal("a recovered panic permanently disabled the job")
+	}
+}
+
+func TestIntervalChangeKeepsSwitchScheduleAndDeletionRemovesBoth(t *testing.T) {
+	testDatabase(t)
+	m := createTestMonitor(t)
+	if err := DB.Create(&Schedule{MonitorID: m.ID, Cron: "0 8 * * *", TargetIP: m.BackupIP}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	engine.mu.Lock()
+	check, scheduled := engine.plans[m.ID].check, engine.plans[m.ID].switches[0]
+	engine.mu.Unlock()
+	before := engine.cron.Entry(scheduled).Next
+	if err := DB.Model(&m).Update("interval", 120).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if got := engine.cron.Entry(scheduled); got.ID != scheduled || !got.Next.Equal(before) {
+		t.Fatalf("interval edit replaced the switch schedule: %+v", got)
+	}
+	if engine.cron.Entry(check).ID != 0 {
+		t.Fatal("obsolete periodic check was retained")
+	}
+	response := requestAPI(t, NewRouter(), "DELETE", fmt.Sprintf("/api/monitors/%d", m.ID), nil)
+	if response.Code != 200 {
+		t.Fatalf("delete failed: %s", response.Body)
+	}
+	if engine.cron.Entry(scheduled).ID != 0 || len(engine.cron.Entries()) != 1 {
+		t.Fatal("deleting a monitor retained scheduled jobs")
+	}
+}
+
+func TestCronSkipsOnlyOverlappingRunsOfTheSameJob(t *testing.T) {
+	testDatabase(t)
+	started, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	id := engine.cron.Schedule(cron.Every(time.Hour), cron.FuncJob(func() {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+	}))
+	job := engine.cron.Entry(id).WrappedJob
+	go func() { job.Run(); close(done) }()
+	<-started
+	t.Cleanup(func() { close(release); <-done })
+	job.Run()
+	if calls.Load() != 1 {
+		t.Fatal("an overlapping invocation ran")
+	}
+	other := engine.cron.Schedule(cron.Every(time.Hour), cron.FuncJob(func() { calls.Add(1) }))
+	engine.cron.Entry(other).WrappedJob.Run()
+	if calls.Load() != 2 {
+		t.Fatal("an unrelated job was blocked")
+	}
+}
 
 func TestCheckQueueBoundsWorkersAndCoalescesPendingMonitors(t *testing.T) {
 	testDatabase(t)

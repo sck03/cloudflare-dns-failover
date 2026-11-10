@@ -2,9 +2,8 @@ import { state } from '../state.js';
 import { apiRequest } from '../api.js';
 import { showNotification } from './notifications.js';
 import { fetchRecords } from './domains.js';
-import { fetchMonitors } from './monitors.js';
+import { refreshMonitorViews } from './monitors.js';
 import { refreshAccountViews } from './accounts.js';
-import { renderDashboard } from './dashboard.js';
 import { LatestRequest } from '../requests.js';
 import { showModal, hideModal, captureModal } from '../modal.js';
 
@@ -126,6 +125,7 @@ function showMonitorModal(monitor, accounts) {
 
     document.getElementById('monitor-name').value = monitor.name || '';
     document.getElementById('monitor-zone-id').value = monitor.cf_zone_id || '';
+    document.getElementById('monitor-record-id').value = monitor.cf_record_id || '';
     document.getElementById('monitor-domain').value = monitor.cf_domain || '';
     document.getElementById('monitor-dns-type').value = monitor.dns_type || 'A';
     document.getElementById('monitor-check-type').value = monitor.type || 'https';
@@ -171,6 +171,7 @@ export async function submitMonitorForm() {
         name: document.getElementById('monitor-name').value.trim(),
         account_name: accountName,
         cf_zone_id: document.getElementById('monitor-zone-id').value.trim(),
+        cf_record_id: document.getElementById('monitor-record-id').value.trim(),
         cf_domain: domain,
         dns_type: document.getElementById('monitor-dns-type').value,
         type: checkType,
@@ -213,7 +214,7 @@ export async function submitMonitorForm() {
 
     if (isCurrent()) hideMonitorModal();
     showNotification('保存成功', 'success');
-    await fetchMonitors(undefined, renderDashboard);
+    await refreshMonitorViews();
 }
 
 // --- Restore Modal --- //
@@ -250,7 +251,7 @@ export async function confirmRestore() {
     });
     if (isCurrent()) hideRestoreModal();
     showNotification('Cloudflare 已确认恢复到主地址', 'success');
-    await fetchMonitors(undefined, renderDashboard);
+    await refreshMonitorViews();
 }
 
 // --- Schedule Modal --- //
@@ -314,7 +315,7 @@ export async function saveScheduleSwitch() {
     });
     if (isCurrent()) hideScheduleSwitchModal();
     showNotification('定时切换保存成功', 'success');
-    await fetchMonitors();
+    await refreshMonitorViews();
 }
 
 // --- Account Modal --- //

@@ -112,6 +112,30 @@ func TestUpdateInvalidatesRecordIDWhenDomainChanges(t *testing.T) {
 	}
 }
 
+func TestUpdateRecordIDResetsDNSIdentity(t *testing.T) {
+	for _, recordID := range []string{"replacement", ""} {
+		t.Run("record="+recordID, func(t *testing.T) {
+			testDatabase(t)
+			m := createTestMonitor(t)
+			if err := DB.Model(&m).Updates(map[string]any{"current_ip": m.BackupIP, "preferred_ip": m.BackupIP}).Error; err != nil {
+				t.Fatal(err)
+			}
+			response := requestAPI(t, NewRouter(), "PUT", fmt.Sprintf("/api/monitors/%d", m.ID), map[string]any{
+				"name": m.Name, "account_name": "test", "type": "http", "target": m.Target,
+				"cf_zone_id": m.CFZoneID, "cf_domain": m.CFDomain, "dns_type": "A", "cf_record_id": recordID,
+				"original_ip": m.OriginalIP, "backup_ip": m.BackupIP,
+			})
+			var got Monitor
+			if err := json.Unmarshal(response.Body.Bytes(), &got); response.Code != 200 || err != nil {
+				t.Fatalf("update HTTP %d: %s, %v", response.Code, response.Body, err)
+			}
+			if got.CFRecordID != recordID || got.CurrentIP != "" || got.PreferredIP != m.OriginalIP || got.Status != "Unknown" {
+				t.Fatalf("new record identity retained old DNS state: %+v", got)
+			}
+		})
+	}
+}
+
 func TestScheduleEndpointAndEmptyScheduleRemoval(t *testing.T) {
 	testDatabase(t)
 	m := createTestMonitor(t)
