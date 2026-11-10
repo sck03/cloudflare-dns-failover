@@ -2,6 +2,7 @@ package cloudflare
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -42,8 +43,30 @@ func testClient(t *testing.T, handler http.HandlerFunc) *Client {
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	c := NewClient()
-	c.BaseURL, c.HTTP = server.URL, server.Client()
+	c.BaseURL = server.URL
 	return c
+}
+
+func TestAPIRedirectDoesNotForwardCredentialsOrReplayWrites(t *testing.T) {
+	var redirected atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirected.Add(1)
+		fmt.Fprint(w, `{"success":true,"result":{"id":"record"}}`)
+	}))
+	defer destination.Close()
+	client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL, http.StatusTemporaryRedirect)
+	})
+	for _, auth := range []Credentials{testCredentials, {Email: "admin@example.com", Key: "private-key"}} {
+		_, err := client.SaveRecord(context.Background(), auth, "zone", "record", map[string]string{"content": "192.0.2.1"})
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusTemporaryRedirect {
+			t.Fatalf("unexpected redirect result: %v", err)
+		}
+	}
+	if redirected.Load() != 0 {
+		t.Fatal("redirect destination received credentials or a DNS mutation")
+	}
 }
 
 func TestValidatesResponseEnvelope(t *testing.T) {

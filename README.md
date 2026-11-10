@@ -4,7 +4,7 @@
 
 用 Go 监控主、备源站，并在故障时更新 Cloudflare DNS。提供 Web 管理、计划切换、多账号、IPv4 / IPv6 / CNAME，以及钉钉、Telegram、邮件通知。
 
-当前工具链为 **Go 1.27.3**，GitHub Actions 固定到提交。项目使用 Go 标准库 HTTP 路由、SQLite 和独立的检测 / 决策 / DNS 模块。页面样式预编译并嵌入程序，使用系统字体，运行时无需访问外部样式 CDN 或字体服务。
+当前工具链为 **Go 1.27.3**，GitHub Actions 固定到提交。项目使用 Go 标准库 HTTP 路由、GORM 官方 SQLite 适配器和 modernc 纯 Go 驱动，检测 / 决策 / DNS 模块独立。Tailwind **4.3.5** 样式预编译并嵌入程序，使用系统字体，运行时无需访问外部样式 CDN 或字体服务。
 
 **网站监控应选 HTTP/HTTPS。** Ping 只能证明网络可达，不能发现网站返回 500、502、503 等应用故障。请填写真实源站地址，使用能反映业务状态的健康检查 URL。
 
@@ -113,7 +113,7 @@ GitHub 上的 `Build and publish` 工作流在 `main` 推送、版本标签或�
 - 测试通过后交叉编译 Linux 三种架构和 Windows amd64；可在 Actions 的 `cfguard-binaries` 附件下载程序、示例配置和 SHA256 校验文件。
 - 验证容器启动、自定义端口健康检查、Ping 和正常停机，再推送多架构 GHCR 镜像，提供 `latest`、提交 SHA 和版本标签。测试失败时不进入发布步骤。
 
-依赖不自动创建升级 PR；需要升级时由维护者手动修改并通过完整 CI。CI 的测试和交叉编译统一读取 `Dockerfile` 中的 Go 构建镜像版本，确保工具链升级完成漏洞检查；`go.mod` 声明最低支持版本。Go 1.27.3 修复了标准库证书验证漏洞 [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809)。
+依赖不自动创建升级 PR；需要升级时由维护者手动修改并通过完整 CI。CI 的测试和交叉编译统一读取 `Dockerfile` 中的 Go 构建镜像版本；`go.mod` 声明最低支持版本。Go 1.27.3 修复了标准库证书验证漏洞 [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809)。modernc SQLite 1.62.0 使用 SQLite 3.54.1，包含锁等待取消和预编译语句相关修复；`modernc.org/libc` 必须匹配该驱动要求的 1.80.1，不单独追升到最新版本。
 
 本地使用 Go 1.27.3：
 
@@ -127,7 +127,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o cfguard .
 
 无配置时会生成 `config/config.yaml` 并退出。检查已启动服务可执行 `./cfguard -healthcheck`，会使用配置中的实际端口。完整 CI 检查见 [scripts/check.sh](scripts/check.sh)，跨平台构建见 [scripts/build.sh](scripts/build.sh)。
 
-修改页面或 JavaScript 中的样式类后，运行 `npm ci && npm run build:css`，将生成的 `static/utilities.css` 一起提交；CI 会重新生成并检查一致性。Node/npm 仅用于开发验证，程序运行和 Go 编译直接使用已提交的样式。完整本地检查需安装 Node LTS 和用于 Go 竞态检测的 C 编译器，再运行 `bash scripts/check.sh`。
+修改页面或 JavaScript 中的样式类后，运行 `npm ci && npm run build:css`，将生成的 `static/utilities.css` 一起提交；CI 会重新生成并检查一致性。Tailwind 4 在 `assets/tailwind.css` 显式指定 HTML / JS 扫描范围，不再使用 JavaScript 配置文件。管理界面面向当前稳定版 Chrome、Edge、Safari 或 Firefox，不维护旧浏览器兼容层。Node/npm 仅用于开发验证，程序运行和 Go 编译直接使用已提交的样式。完整本地检查需安装 Node LTS 和用于 Go 竞态检测的 C 编译器，再运行 `bash scripts/check.sh`。
 
 ## 架构与审阅
 

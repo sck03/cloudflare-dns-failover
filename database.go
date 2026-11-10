@@ -1,16 +1,20 @@
 package main
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/glebarez/sqlite"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	_ "modernc.org/sqlite"
 )
 
 var DB *gorm.DB
@@ -20,28 +24,51 @@ func InitDB() error {
 	if path == "" {
 		path = "instance/cfguard.db"
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
+	db, err := openDatabase(path)
+	if err == nil {
+		DB = db
 	}
-	var err error
-	DB, err = gorm.Open(sqlite.Open(path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"), &gorm.Config{
+	return err
+}
+
+// openDatabase owns the connection pool and closes it on every setup failure.
+// Tests use the same driver, pragmas and schema as the application.
+func openDatabase(path string) (*gorm.DB, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, err
+	}
+	// A file URI escapes literal %, # and ? in paths instead of treating them as
+	// connection options. Windows drive paths need the leading URI slash too.
+	uri := url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(path), "/")}
+	uri.RawQuery = url.Values{
+		"_pragma":      {"busy_timeout(5000)", "journal_mode(WAL)", "foreign_keys(1)"},
+		"_time_format": {"string_no_monotonic"},
+	}.Encode()
+	pool, err := sql.Open("sqlite", uri.String())
+	if err != nil {
+		return nil, err
+	}
+	// SQLite permits one writer. Bound connections and their page caches.
+	pool.SetMaxOpenConns(1)
+	pool.SetMaxIdleConns(1)
+	db, err := gorm.Open(sqlite.New(sqlite.Config{DriverName: "sqlite", Conn: pool}), &gorm.Config{
 		Logger: logger.New(log.New(os.Stderr, "", log.LstdFlags), logger.Config{
 			SlowThreshold: time.Second, LogLevel: logger.Error,
 			IgnoreRecordNotFoundError: true, ParameterizedQueries: true,
 		}),
 	})
-	if err != nil {
-		return err
+	if err == nil {
+		err = db.AutoMigrate(&Monitor{}, &Schedule{}, &SwitchEvent{}, &Setting{})
 	}
-	sqlDB, err := DB.DB()
 	if err != nil {
-		return err
+		pool.Close()
+		return nil, err
 	}
-	// SQLite permits one writer. Bound connections instead of growing a pool
-	// whose concurrent writes contend for the same database file.
-	sqlDB.SetMaxOpenConns(1)
-	sqlDB.SetMaxIdleConns(1)
-	return DB.AutoMigrate(&Monitor{}, &Schedule{}, &SwitchEvent{}, &Setting{})
+	return db, nil
 }
 
 type Setting struct {

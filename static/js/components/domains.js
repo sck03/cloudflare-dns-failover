@@ -3,6 +3,7 @@ import { apiRequest } from '../api.js';
 import { showNotification } from './notifications.js';
 import { escapeHTML } from '../format.js';
 import { LatestRequest } from '../requests.js';
+import { hideModal } from '../modal.js';
 
 const zoneRequest = new LatestRequest();
 const recordRequest = new LatestRequest();
@@ -44,7 +45,7 @@ function renderZones(zones) {
             <div class="flex items-start justify-between mb-4">
                 <div class="flex-1">
                     <div class="flex items-center gap-2 mb-2">
-                        <div class="p-2 rounded-lg bg-gradient-to-br from-orange-50 to-orange-100">
+                        <div class="p-2 rounded-lg bg-linear-to-br from-orange-50 to-orange-100">
                             <svg class="w-5 h-5 text-orange-600" viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M12.5 2L2 7.5v9L12.5 22l10.5-5.5v-9L12.5 2zm0 2.311L20.689 8.5 12.5 12.689 4.311 8.5 12.5 4.311zM4 10.311l7.5 3.939v7.439L4 17.75v-7.439zm9.5 11.378v-7.439l7.5-3.939v7.439l-7.5 3.939z"/>
                             </svg>
@@ -66,7 +67,7 @@ function renderZones(zones) {
             </div>
             
             <div class="space-y-3 mb-4">
-                <div class="p-3 bg-gradient-to-r from-gray-50 to-gray-100 rounded-lg">
+                <div class="p-3 bg-linear-to-r from-gray-50 to-gray-100 rounded-lg">
                     <div class="text-xs text-gray-500 mb-1">Zone ID</div>
                     <div class="font-mono text-xs text-gray-700 break-all">${escapeHTML(zone.id)}</div>
                 </div>
@@ -125,7 +126,7 @@ export function resetDomains() {
     zoneRequest.cancel();
     hideRecords();
     state.editingRecordId = null;
-    document.getElementById('record-modal')?.classList.add('hidden');
+    hideModal('record-modal');
     document.getElementById('zone-list').replaceChildren();
     document.getElementById('stat-zones').textContent = '—';
 }
@@ -135,10 +136,11 @@ export async function deleteRecord(recordId) {
         return;
     }
 
+    const zoneId = state.currentZoneId;
     try {
-        await apiRequest(`/api/zones/${state.currentZoneId}/records/${recordId}`, { method: 'DELETE' });
+        await apiRequest(`/api/zones/${zoneId}/records/${recordId}`, { method: 'DELETE' });
         showNotification('DNS记录删除成功', 'success');
-        await fetchRecords(state.currentZoneId);
+        await fetchRecords(zoneId);
     } catch (error) {
         console.error('删除DNS记录失败:', error);
         showNotification(error.message || '删除DNS记录失败', 'error');

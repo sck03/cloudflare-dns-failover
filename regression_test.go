@@ -11,9 +11,6 @@ import (
 
 	"cfguard/internal/cloudflare"
 	"cfguard/internal/health"
-	"github.com/glebarez/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -26,13 +23,8 @@ func testDatabase(t *testing.T) {
 	oldEngine, oldPath := engine, LoadedConfigPath
 	directory := t.TempDir()
 	var err error
-	DB, err = gorm.Open(sqlite.Open(filepath.Join(directory, "test.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	DB, err = openDatabase(filepath.Join(directory, "test.db"))
 	if err != nil {
-		t.Fatal(err)
-	}
-	sqlDB, _ := DB.DB()
-	sqlDB.SetMaxOpenConns(1)
-	if err = DB.AutoMigrate(&Monitor{}, &Schedule{}, &SwitchEvent{}, &Setting{}); err != nil {
 		t.Fatal(err)
 	}
 	AppConfig = Config{Accounts: []AccountConfig{{Name: "test", ApiToken: "test-token"}}}

@@ -57,7 +57,12 @@ type Client struct {
 
 func NewClient() *Client {
 	return &Client{
-		HTTP:    &http.Client{Timeout: 15 * time.Second},
+		HTTP: &http.Client{
+			Timeout: 15 * time.Second,
+			// API redirects are unexpected; never forward API keys or replay DNS
+			// mutations at a redirect destination.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		BaseURL: "https://api.cloudflare.com/client/v4",
 	}
 }

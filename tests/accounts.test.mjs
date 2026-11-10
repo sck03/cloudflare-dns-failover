@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { loadAccounts, editAccount, deleteAccount, activateAccount, refreshAccountViews } from '../static/js/components/accounts.js';
-import { submitAccountForm } from '../static/js/components/modals.js';
+import { submitAccountForm, openAccountModal, hideAccountModal, editRecord, hideRecordModal, submitRecordForm } from '../static/js/components/modals.js';
 import { loadSettings, saveSettings, cancelSettings } from '../static/js/components/settings.js';
 import { viewRecords } from '../static/js/components/domains.js';
 import { state } from '../static/js/state.js';
@@ -127,4 +127,49 @@ test('saving notifications cancels older settings reads and sends no account cre
     assert.equal(element('set-tg-chat-id').value, 'new-chat');
     assert.equal(saved.telegram.chat_id, 'new-chat');
     assert.equal(Object.hasOwn(saved, 'cloudflare'), false);
+});
+
+test('an older account save cannot close a reopened editor for the same account', async t => {
+    const element = mockDocument(t);
+    let finishSave;
+    t.mock.method(globalThis, 'fetch', (path, options) => {
+        if (options.method === 'PUT') return new Promise(resolve => { finishSave = resolve; });
+        return Promise.resolve(Response.json(path === '/api/zones' ? [] : { accounts: [{ id: 'same', name: 'same' }] }));
+    });
+    openAccountModal({ id: 'same', name: 'same' });
+    const saving = submitAccountForm();
+    hideAccountModal();
+    openAccountModal({ id: 'same', name: 'new draft' });
+    finishSave(Response.json({ message: 'saved' }));
+    await saving;
+    assert.equal(state.editingAccountId, 'same');
+    assert.equal(element('account-modal').classList.contains('hidden'), false);
+    assert.equal(element('account-name').value, 'new draft');
+    hideAccountModal();
+});
+
+test('an older DNS save preserves the new editor and does not fetch the new zone', async t => {
+    const element = mockDocument(t);
+    const paths = [];
+    let finishSave;
+    t.mock.method(globalThis, 'fetch', (path, options) => {
+        paths.push(path);
+        if (options.method === 'PUT') return new Promise(resolve => { finishSave = resolve; });
+        return Promise.resolve(Response.json([]));
+    });
+    state.currentZoneId = 'first';
+    state.recordsCache = [{ id: 'one', type: 'A', name: 'one.example', content: '192.0.2.1' }];
+    editRecord('one');
+    const saving = submitRecordForm();
+    hideRecordModal();
+    state.currentZoneId = 'second';
+    state.recordsCache = [{ id: 'two', type: 'A', name: 'two.example', content: '192.0.2.2' }];
+    editRecord('two');
+    finishSave(Response.json({ id: 'one' }));
+    await saving;
+    assert.deepEqual(paths, ['/api/zones/first/records/one']);
+    assert.equal(state.editingRecordId, 'two');
+    assert.equal(element('record-modal').classList.contains('hidden'), false);
+    assert.equal(element('record-name').value, 'two.example');
+    hideRecordModal();
 });

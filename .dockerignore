@@ -19,4 +19,3 @@ package*.json
 .tools/
 _cleanup/
 assets/
-tailwind.config.js

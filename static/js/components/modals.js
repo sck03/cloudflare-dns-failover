@@ -6,6 +6,7 @@ import { fetchMonitors } from './monitors.js';
 import { refreshAccountViews } from './accounts.js';
 import { renderDashboard } from './dashboard.js';
 import { LatestRequest } from '../requests.js';
+import { showModal, hideModal, captureModal } from '../modal.js';
 
 const monitorRequest = new LatestRequest();
 
@@ -46,16 +47,17 @@ function showRecordModal(record) {
     document.getElementById('record-ttl').value = record.ttl || 1;
     document.getElementById('record-proxied').checked = !!record.proxied;
 
-    modal.classList.remove('hidden');
+    showModal('record-modal');
 }
 
 export function hideRecordModal() {
-    const modal = document.getElementById('record-modal');
-    if (modal) modal.classList.add('hidden');
+    hideModal('record-modal');
     state.editingRecordId = null;
 }
 
 export async function submitRecordForm() {
+    const isCurrent = captureModal('record-modal');
+    const zoneId = state.currentZoneId;
     const payload = {
         type: document.getElementById('record-type').value,
         name: document.getElementById('record-name').value.trim(),
@@ -82,9 +84,9 @@ export async function submitRecordForm() {
         });
     }
 
-    hideRecordModal();
+    if (isCurrent()) hideRecordModal();
     showNotification('保存成功', 'success');
-    await fetchRecords(state.currentZoneId);
+    await fetchRecords(zoneId);
 }
 
 // --- Monitor Modal --- //
@@ -142,17 +144,17 @@ function showMonitorModal(monitor, accounts) {
     document.getElementById('monitor-original-cdn').checked = !!monitor.original_ip_cdn_enabled;
     document.getElementById('monitor-backup-cdn').checked = !!monitor.backup_ip_cdn_enabled;
 
-    modal.classList.remove('hidden');
+    showModal('monitor-modal');
 }
 
 export function hideMonitorModal() {
     monitorRequest.cancel();
     state.editingMonitorId = null;
-    const modal = document.getElementById('monitor-modal');
-    if (modal) modal.classList.add('hidden');
+    hideModal('monitor-modal');
 }
 
 export async function submitMonitorForm() {
+    const isCurrent = captureModal('monitor-modal');
     const checkType = document.getElementById('monitor-check-type').value;
     let checkTarget = document.getElementById('monitor-check-target').value.trim();
     if ((checkType === 'http' || checkType === 'https') && checkTarget && !/^https?:\/\//i.test(checkTarget)) {
@@ -209,7 +211,7 @@ export async function submitMonitorForm() {
         });
     }
 
-    hideMonitorModal();
+    if (isCurrent()) hideMonitorModal();
     showNotification('保存成功', 'success');
     await fetchMonitors(undefined, renderDashboard);
 }
@@ -229,24 +231,24 @@ export function openRestoreModal(monitorId) {
     document.getElementById('restore-monitor-name').textContent = monitor.name;
     document.getElementById('restore-proxied').checked = !!monitor.original_ip_cdn_enabled;
 
-    modal.classList.remove('hidden');
+    showModal('restore-modal');
 }
 
 export function hideRestoreModal() {
-    const modal = document.getElementById('restore-modal');
-    if (modal) modal.classList.add('hidden');
+    hideModal('restore-modal');
     state.restoreMonitorId = null;
 }
 
 export async function confirmRestore() {
     if (!state.restoreMonitorId) return;
+    const isCurrent = captureModal('restore-modal');
     const proxied = document.getElementById('restore-proxied').checked;
     await apiRequest(`/api/monitors/${state.restoreMonitorId}/restore`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ proxied })
     });
-    hideRestoreModal();
+    if (isCurrent()) hideRestoreModal();
     showNotification('Cloudflare 已确认恢复到主地址', 'success');
     await fetchMonitors(undefined, renderDashboard);
 }
@@ -270,17 +272,17 @@ export async function openScheduleSwitchModal(monitorId) {
     document.getElementById('schedule-hours').value = monitor.schedule_hours || '';
     document.getElementById('schedule-ip').value = monitor.schedules && monitor.schedules[0] ? monitor.schedules[0].target_ip : '';
 
-    modal.classList.remove('hidden');
+    showModal('schedule-modal');
 }
 
 export function hideScheduleSwitchModal() {
-    const modal = document.getElementById('schedule-modal');
-    if (modal) modal.classList.add('hidden');
+    hideModal('schedule-modal');
     state.scheduleMonitorId = null;
 }
 
 export async function saveScheduleSwitch() {
     if (!state.scheduleMonitorId) return;
+    const isCurrent = captureModal('schedule-modal');
     const current = state.monitorsCache.find(m => m.id == state.scheduleMonitorId);
     if (current?.schedules?.length && !current.schedule_hours &&
         !confirm('保存将替换该策略的全部自定义计划，确定继续吗？')) return;
@@ -310,7 +312,7 @@ export async function saveScheduleSwitch() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     });
-    hideScheduleSwitchModal();
+    if (isCurrent()) hideScheduleSwitchModal();
     showNotification('定时切换保存成功', 'success');
     await fetchMonitors();
 }
@@ -331,16 +333,16 @@ export function openAccountModal(account = null) {
     apiKey.value = '';
     apiKey.placeholder = account?.has_api_key ? '已设置，留空保留' : '填写 API Key';
     
-    modal.classList.remove('hidden');
+    showModal('account-modal');
 }
 
 export function hideAccountModal() {
-    const modal = document.getElementById('account-modal');
-    if (modal) modal.classList.add('hidden');
+    hideModal('account-modal');
     state.editingAccountId = null;
 }
 
 export async function submitAccountForm() {
+    const isCurrent = captureModal('account-modal');
     const name = document.getElementById('account-name').value.trim();
     const token = document.getElementById('account-token').value.trim();
     const email = document.getElementById('account-email').value.trim();
@@ -370,7 +372,7 @@ export async function submitAccountForm() {
         });
     }
 
-    hideAccountModal();
+    if (isCurrent()) hideAccountModal();
     showNotification('保存成功', 'success');
     await refreshAccountViews();
 }
